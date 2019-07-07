@@ -12,439 +12,59 @@
 #	This script can backup some hosts each time and keep archive over time.	   #
 #																			   #
 ################################################################################
-#														23.03.2019 - 24.04.2019
+#														23.03.2019 - 07.07.2019
 
+PATH_INFRASTRUCTURES='/root/Infrastructures'
+
+SCRIPT_ENSURE_LOCKFILE=1
+SCRIPT_ENSURE_ROOT=1
+SCRIPT_ENSURE_TTY=1
+SCRIPT_NEW_TTY_NO_CLOSE='NO-CLOSE'
 
 . /data/.script_common.sh
 
-#==============================================================================#
-#==     Ensure we are in a terminal                                          ==#
-#==============================================================================#
-
-if [ "$1" != 'SkipTermCheck' ]; then
-	ParentProcess="`ps -p $PPID -o comm=`"
-
-#	if [ "$ParentProcess" != "xfce4-terminal" ] && [ "$ParentProcess" != "bash" ]; then
-# 		xfce4-terminal --geometry 80x25 -x $0 $*
-#	fi
-
-	if [ "$ParentProcess" != 'konsole' ] && [ "$ParentProcess" != 'bash' ]; then
-		konsole --profile FooPhoenix --noclose -e $0 SkipTermCheck $*
-		exit
-	fi
-else
-	shift
-fi
-
-
-
-#==============================================================================#
-#==     Ensure that the script is executed with root access                  ==#
-#==============================================================================#
-
-if [ `id -nu` != "root" ]; then
-	sudo "$0" SkipTermCheck $*
-	exit
-fi
-
-
-set -eE	# = -o errexit -o errtrace
-
-function getProcessTree()
-{
-	local _var_name="${1}"
-	local _pid _ppid _command  _ppids=( ) _commands=( )
-
-	# Take all elements given by `ps` and store it in arrays.
-	# The index of elements is its PID !
-	while IFS= read -r _command ; do
-		_pid=${_command:0:5}
-		_ppid=${_command:6:5}
-		_command=${_command:12}
-
-		_ppids[$_pid]="$_ppid"
-		_commands[$_pid]="$_command"
-
-# 		printf '%5d %5d %s\n' $_pid $_ppid "$_command"
-	done <<< $(ps --no-headers -ax -o pid:5,ppid:5,command ) # For debug : ps --no-headers --forest -ax -o pid:5,ppid:5,command
-
-	#---------------------------------------------------------------------------
-
-	# Build the list of parents process and children process and store it in _pids[]
-	# The _children[] array will store how many children has each process
-	# The _relationship[] array will manage the output color, 0 = no relation, 1 = parent tree, 2 = myself, 3 = children tree
-
-	local _current_pid="$BASHPID" _pids=( ) _children=( ) _relationship=( )
-
-	# Build parents process list here
-	_pid=$_current_pid
-	while (( 1 )); do
-		_pids+=( $_pid ) # add the current pid
-		_pid=${_ppids[$_pid]} # retreive the ppid of the current pid
-		_children[$_pid]=1
-		_relationship[$_pid]=1
-		if (( _pid == 1 )); then
-			break
-		fi
-	done
-
-	local _index _check_pid _children_pids
-
-	# Build children process list here
-	_children_pids=( $_current_pid ) # Contain the list of all pid waiting to be evaluated
-	_children[$_current_pid]=0
-	_relationship[$_current_pid]=2
-	_index=0
-	while (( _index < ${#_children_pids} )); do
-		_pid=${_children_pids[$_index]}
-		if (( _pid != 0 )); then
-			for _check_pid in ${!_ppids[@]}; do # ${!_ppids[@]} return the list of all pid because each ppid has their own pid as key
-				if (( _pid == _ppids[_check_pid] )); then
-					_pids+=( $_check_pid ) # add the current checked pid
-					_relationship[$_check_pid]=3
-					_children[$_check_pid]=0
-					(( ++_children[_pid] )) # add one children
-					_children_pids+=( $_check_pid ) # add this pid to be evaluated later
-				fi
-			done
-		fi
-		(( ++_index ))
-	done
-
-	#---------------------------------------------------------------------------
-
-	# sort all pid
-	_pids=( $(printf "%s\n" "${_pids[@]}" | sort -n ) )
-
-	# Build children process of the root process in the tree
-	_children_pids=( ${_pids[0]} ) # Contain the list of all pid waiting to be evaluated
-	_index=0
-	while (( _index < ${#_children_pids} )); do
-		_pid=${_children_pids[$_index]}
-		if (( _pid != 0 )); then
-			for _check_pid in ${!_ppids[@]}; do # ${!_ppids[@]} return the list of all pid because each ppid has their own pid as key
-				if (( _pid == _ppids[_check_pid] )); then
-					if (( _relationship[_check_pid] == 0 )); then # if _relationship[_check_pid] is not 0, so this pid is already in the list, just do nothing
-						_pids+=( $_check_pid ) # add the current checked pid
-						_relationship[$_check_pid]=0
-						_children[$_check_pid]=${_children[$_check_pid]:-0}
-						(( ++_children[_pid] )) # add one children
-					fi
-					_children_pids+=( $_check_pid ) # add this pid to be evaluated later
-				fi
-			done
-		fi
-		(( ++_index ))
-	done
-
-	#---------------------------------------------------------------------------
-
-	# sort all pid
-	_pids=( $(printf "%s\n" "${_pids[@]}" | sort -n ) )
-
-	#---------------------------------------------------------------------------
-
-	local _level _output='' _screen_size=$(( $(tput cols) - 6 ))
-
-	_children_pids=( ${_pids[0]} )
-	_index=0
-	while (( ${#_children_pids} > 0 )); do
-
-		_pid=${_children_pids[$_index]}
-		unset -v _children_pids[$_index]
-		_index=$(( _index - 1 ))
-		_children_pids=( ${_children_pids[@]} )
-
-		_check_pid=${_ppids[$_pid]}
-		_children[$_check_pid]=$(( _children[$_check_pid] - 1 ))
-
-		for _check_pid in ${_pids[@]}; do
-			if (( _pid == _ppids[_check_pid] )); then
-				_children_pids+=( $_check_pid )
-				_index=$(( _index + 1 ))
-			fi
-		done
-
-		_command=''
-
-		_check_pid=$_pid
-		_level=0
-		while (( 1 )); do
-			_check_pid=${_ppids[$_check_pid]}
-			if (( _check_pid == 1 )); then
-				break
-			fi
-			if (( _children[_check_pid] > 0 )); then
-				if (( _level == 0 )); then
-					_command="├─$_command"
-				else
-					_command="│ $_command"
-				fi
-			else
-				if (( _level == 0 )); then
-					_command="└─$_command"
-				else
-					_command="  $_command"
-				fi
-			fi
-			(( ++_level ))
-		done
-
-		(( _level = _screen_size - ((_level * 2) + 4) ))
-
-		case ${_relationship[$_pid]} in
-			0)
-				_command="${_command}⬥┈┈ ${_commands[$_pid]:0:$_level}"	;;
-			1)
-				_command="${_command}\e[2;33m⬥\e[0m┈┈ \e[2;33m${_commands[$_pid]:0:$_level}\e[0m"	;;
-			2)
-				_command="${_command}\e[0;31m⬥\e[0m┈┈ \e[0;31m${_commands[$_pid]:0:$_level}\e[0m"	;;
-			3)
-				_command="${_command}\e[0;33m⬥\e[0m┈┈ \e[0;33m${_commands[$_pid]:0:$_level}\e[0m"	;;
-		esac
-
-		printf -v _pid '%5d' $_pid
-		_output="${_output}${_pid} ${_command}\n"
-# 		echo -e "${_pid} ${_command}"
-	done
-
-	printf -v $_var_name '%s' "$_output"
-}
-
-function error_report()
-{
-	local _crash_time _crash_after _data _index
-
-	printf -v _crash_time '%(%A %-d %B %Y @ %X)T' -1
-	TZ=UTC printf -v _crash_after '%(%X)T' $SECONDS
-
-	local _line_number="${1}"
-	local _subshell_level="${2}"
-	local _last_exit_status="${3}"
-	local _last_command="${4}"
-
-	{
-		echo -e "\r\e[0J\n"
-
-		echo -ne "\e[97m[\e[25;31m ERROR \e[97m]\e[0m " # echo a blinking [ ERROR ]
-		echo -e "The script has crashed at [\e[1;97m $_crash_time \e[0m] after running [\e[1;97m $_crash_after \e[0m]"
-		echo
-		echo "  PID   Commands"
-
-		getProcessTree _data
-		echo -e "$_data"
-
-		echo
-		echo "Calls history :"
-		for _index in ${!BASH_LINENO[@]}; do
-			printf '%5d ' ${BASH_LINENO[$_index]}
-			echo -e "${FUNCNAME[$_index]} \e[2m( in ${BASH_SOURCE[$_index]} )\e[0m"
-		done
-
-		echo
-		echo -e "Error reported at line \e[0;31m$_line_number\e[0m, last known exit status was \e[0;31m$_last_exit_status\e[0m, the crashed command is :\n"
-		echo -e "\t\e[1;31m\e[2m$_last_command\e[0m"
-
-		echo
-		echo
-	}
-
-	exit 1
-}
-trap 'error_report "$LINENO" "$BASH_SUBSHELL" "$?" "$BASH_COMMAND" ' ERR QUIT INT TERM
-
-
-function Toto()
-{
-	Test1 "${1}" 'to' &
-
-	sleep 2
-
-}
-
-function Test1()
-{
-	echo $BASH_SUBSHELL $BASH_COMMAND
-	echo ${BASH_LINENO[@]} $LINENO
-	echo ${FUNCNAME[@]} $LINENO
-	echo ${BASH_SOURCE[@]} $LINENO
-# 	echo "Error Test" >&2
-# 	return 1
-{
-	(( toto = 10 / titi ))
-}
-	echo ${BASH_ARGC[@]} ${BASH_ARGV[@]} $LINENO
-	sleep 2
-}
-
-ps -p ${PARENT_PID:-32760} -ho pid || echo 0
-
-
-
-PARENT_PID="$BASHPID"
-{
-	index=0
-	while (( ++index < 100 )); do
-		echo -n ''
-		sleep 0.5
-		echo "toto -- $index"
-
-		if (( $(ps -p ${PARENT_PID:-32760} -ho pid || echo 0) != $PARENT_PID )); then
-			echo "I break now !"
-			break
-		fi
-	done
-	echo "I exit now !"
-} &
-
-sleep 0.5
-
-Toto 12 &
-
-sleep 0.5
-
-echo "ok here $BASHPID"
-var="$BASHPID"
-
-
-sleep 2
-
-exit
-
-# echo -n '' > /dev/shm/test.txt
+################################################################################################################################################################
 #
+# SCRIPT_START_TIME SCRIPT_NAME SCRIPT_FULLNAME SCRIPT_REAL_FULLNAME SCRIPT_TTY SCRIPT_ENSURE_LOCKFILE SCRIPT_ENSURE_ROOT SCRIPT_ENSURE_TTY SCRIPT_NEW_TTY_NO_CLOSE
+# SCRIPT_PID SCRIPT_WINDOWED_STDERR SCRIPT_DARKEN_BOLD PATH_LOG PATH_LOCK PATH_RAM_DISK PATH_TMP PATH_INFRASTRUCTURES PADDING_SPACE PADDING_ZERO ACTION_TAG_SIZE
+# LOOP_END_TAG FILENAME_FORBIDEN_CHARS FILENAME_FORBIDEN_NAMES debugTimeIteration debugTimeResults debugTimeResult scriptPostRemoveFiles pipeExpectedEnd pipeReceivedEnd
+# pipeParentProcessID removeArrayItem removeArrayDuplicate SCRIPT_DARKEN_BOLD_TAG S_NO S_BO S_DA S_IT S_UN S_BL S_BA S_R_AL S_R_BO S_R_DA S_R_IT S_R_UN S_R_BL S_R_BA
+# S_R_CF S_R_CB S_BLA S_RED S_GRE S_YEL S_BLU S_MAG S_CYA S_LGY S_DGY S_LRE S_LGR S_LYE S_LBL S_LMA S_LCY S_WHI S_B_BLA S_B_RED S_B_GRE S_B_YEL S_B_BLU S_B_MAG S_B_CYA
+# S_B_LGY S_B_DGY S_B_LRE S_B_LGR S_B_LYE S_B_LBL S_B_LMA S_B_LCY S_B_WHI S_NOBLA S_NORED S_NOGRE S_NOYEL S_NOBLU S_NOMAG S_NOCYA S_NOLGY S_NODGY S_NOLRE S_NOLGR S_NOLYE
+# S_NOLBL S_NOLMA S_NOLCY S_NOWHI S_BOBLA S_BORED S_BOGRE S_BOYEL S_BOBLU S_BOMAG S_BOCYA S_BOLGY S_BODGY S_BOLRE S_BOLGR S_BOLYE S_BOLBL S_BOLMA S_BOLCY S_BOWHI
+# CO_HIDE CO_SHOW CO_SAVE_POS CO_RESTORE_POS ES_CURSOR_TO_SCREEN_END ES_CURSOR_TO_SCREEN_START ES_ENTIRE_SCREEN ES_CURSOR_TO_LINE_END ES_CURSOR_TO_LINE_START
+# ES_ENTIRE_LINE getCSIm getCSI_RGB getCSI_GRAY showRGB_Palette getCSI_CursorMove getCSI_ScreenMove A_IN_PROGRESS A_OK A_FAILED_R A_FAILED_Y A_SUCCESSED A_SKIPPED
+# A_ABORTED_NR A_ABORTED_RR A_ABORTED_NY A_WARNING_NR A_WARNING_RR A_WARNING_NY A_ERROR_NR A_ERROR_BR A_ERROR_RR A_UP_TO_DATE_G A_MODIFIED_Y A_UPDATED_Y A_UPDATED_G
+# A_ADDED_B A_COPIED_G A_MOVED_G A_REMOVED_R A_EXCLUDED_R A_BACKUPED_G A_EMPTY_TAG A_TAG_LENGTH_SIZE getActionTag errcho checkLoopFail checkLoopEnd getProcessTree safeExit
+# formatSizeV_Colors getFileTypeV checkFilename cloneFolderDetails clonePathDetails shortenFileNameV formatSizeV getFileSizeV checkLockfileOwned takeLockfile releaseLockfile
+# checkSectionStatus makeSectionStatusDone makeSectionStatusUncompleted ensureTTY ensureRoot getWordUserChoiceV getTimerV processTimeResultsV removeCSI_Tag getCSI_StringLength
+# CO_GO_TOP_LEFT CO_UP_1
 #
-# foo="test"
-#
-# rm -f $foo
-# mkfifo $foo
-#
-# canal=( )
-# id=2
-#
-# exec {canal[$id]}<> "${foo}"
-#
-# for process in {1..60}; do
-# 	{
-# 		index=0
-# 		while [ $index -lt 1000 ]; do
-# 			(( index++ ))
-# 			echo "Je suis la ligne n° $index du process $process"  # >> /dev/shm/test.txt
-# # 			sleep 0.2
-# 		done >&${canal[$id]}; echo ":END:" >&${canal[$id]}
-# 	} &
-# done
-#
-#
-# end=0
-# index=0
-# # cat "/dev/shm/test.txt" |
-# while read -u ${canal[$id]} Line; do
-# 	if [ "$Line" == ":END:" ]; then
-# 		if [ $(( ++end )) -eq 60 ]; then
-# 			break
-# 		fi
-# 		continue
-# 	fi
-# 	if [ $(( ++index % 731 )) -eq 0 ]; then
-# 		echo "$Line"
-# 	fi
-# done
-#
-# echo "canal : ${canal[$id]}"
-#
-# exec {canal[$id]}>&-
-#
-# echo "Index : $index"
-
-
-
-# declare -A pipe
-#
-# pipe[4]=25
-# pipe[7]=24
-# pipe["toto"]=22
-# pipe[titi]=21
-#
-# echo "${pipe[@]} : ${!pipe[@]}"
-
-#
-#
-# find -P /root/BackupFolder/TEST -type f,l,p,s,b,c,d -printf '%12s %y %3d %p\n' |
-# while IFS= read file_data; do
-#
-# 	rw=''
-# 	type=''
-# 	exist=0
-#
-# 	file_size=${file_data:0:12}
-# 	file_type=${file_data:13:1}
-# 	file_depth=${file_data:15:3}
-# 	file_name=${file_data:19}
-#
-#
-# 	if [ "$type" == 'f' ] || [ "$type" == 'd' ]; then
-# 		continue
-# 	fi
-# 	echo "$file_size - $file_type <> $type ($exist) - ${rw} $file_depth $file_name"
-#
-# done
-#
-# exit
-
-
-
+################################################################################################################################################################
 
 #==============================================================================#
 #==     Constants Definition                                                 ==#
 #==============================================================================#
 
-set -eE	# = -o errexit -o errtrace
-printf -v SCRIPT_START_TIME '%(%s)T'		# The script start time
+declare -r PATH_BACKUP_FOLDER='/root/BackupFolder/TEST'		# The path of the backup folder in the BackupSystem virtual machine...
+PATH_HOST_BACKUPED_FOLDER='/root/HostBackuped'				# The path of the backup folder in the BackupSystem virtual machine...
 
-PATH_CurrentScript="${0%/*}"
-PATH_LOG='/var/log'
-PATH_TMP='/tmp'
-PATH_RamDisk='/dev/shm'
-PATH_Infrastructures='/root/Infrastructures'
-# PATH_Infrastructures='/media/foophoenix/AppKDE/Infrastructures'
+declare -r STATUS_FOLDER="_Backup_Status_"
+declare -r TRASH_FOLDER="_Trashed_"
+declare -r VARIABLES_FOLDER="Variables_State"
 
-#==============================================================================#
+declare -r PATHFILE_LAST_BACKUP_DATE="$PATH_BACKUP_FOLDER/$STATUS_FOLDER/_LastBackupDate"
+declare -r PATH_WORKING_DIRECTORY="$PATH_BACKUP_FOLDER/$STATUS_FOLDER/WorkingDirectory"
 
-PATH_BackupFolder='/root/BackupFolder/TEST'		# The path of the backup folder in the BackupSystem virtual machine...
-PATH_HostBackupedFolder='/root/HostBackuped'		# The path of the backup folder in the BackupSystem virtual machine...
-
-STATUS_FOLDER="_Backup_Status_"
 CAT_STATUS="Status"
 CAT_VARIABLES_STATE="VarState"
 CAT_STATISTICS="Statistics"
 CAT_FILESLIST="FilesList"
 
+# declare -ar HOSTS_LIST=( 'BravoTower' 'Router' )
+declare -ar HOSTS_LIST=( 'Router' )
 
-PATH_BackupStatus="/////"
-PATH_BackupStatusRAM="/////"
-StatisticsFile="/////"
-StatisticsFileRAM="/////"
-
-FilesList="////"
-FilesListRAM="/////"
-IncludeList="////"
-ExcludeList="/////"
-
-HOSTS_LIST=( "BravoTower" "Router" )
-HOSTS_LIST=( "Router" )
-
-PADDING='                                                                                                                                                                '
-
-
-
-#==============================================================================#
-#==     Include bases sub-scripts                                            ==#
-#==============================================================================#
-
-. $PATH_Infrastructures/BashColors.sh
-. $PATH_Infrastructures/BashActions.sh
-
+declare -ri BRUTAL=0		# 1 = Force a whole files backup to syncronize all !! (can be very very looooong...)
 
 
 ################################################################################
@@ -455,75 +75,43 @@ PADDING='                                                                       
 ################################################################################
 ################################################################################
 
-function error_report()
+function takeWorkingDirectory
 {
-	echo
-	echo -e "$(buildTimer) ${A_Error} Script error (${3}) at line ${1} with command : "
-	echo -e "$(buildTimer) ${A_NoAction} ${2}"
-	echo
+# 	[[ -d "$PATH_WORKING_DIRECTORY" ]] &&
+# 		cp -r "$PATH_WORKING_DIRECTORY/" "$PATH_TMP"
 
-# 	saveCurrentState
-
-	exit 1
+	return 0
 }
 
-function getSelectableWord()
+function backupWorkingDirectory
 {
-	local _word _words_list=( ${1,,} )
+	mkdir -p "$PATH_WORKING_DIRECTORY"
+	cp -Lr "$PATH_TMP/" "$PATH_WORKING_DIRECTORY"
+}
 
-	local _char_index _char _chars=''
-	local _selectable_words="${TF_YELLOW}"
+function clearWorkingDirectory
+{
+	[[ -d "$PATH_WORKING_DIRECTORY" ]] &&
+		rm --preserve-root -fr "$PATH_WORKING_DIRECTORY"
 
-	for _word in ${_words_list[@]}; do
-		_char_index=0
-		while [ $_char_index -lt ${#_word} ]; do
-			_char=${_word:$_char_index:1}
-			if [[ $_chars == *${_char^^}* ]]; then
-				_selectable_words="${_selectable_words}${_char}"
-			else
-				_chars="${_chars}${_char^^}"
-				_selectable_words="${_selectable_words}${TS_DARK}[${TF_LYELLOW}${TS_BOLD}${_char^^}${TF_YELLOW}${TS_DARK}]${TF_YELLOW}"
-				if [ $(( ++_char_index )) -lt ${#_word} ]; then
-					_selectable_words="${_selectable_words}${_word:$_char_index}"
-				fi
-				_selectable_words="${_selectable_words} "
-				break
-			fi
-			(( ++_char_index ))
-		done
-	done
+	return 0
+}
 
-	_selectable_words="${_selectable_words}${TR_ALL}: "
+function getHostWorkingDirectory
+{
+	local -ir in_memory=${1:-0}
 
-	echo -en "$_selectable_words"
-
-	local readed_key
-	selected_word=0
-	while true; do
-		read -sn 1 readed_key
-		readed_key="${readed_key^^}"
-
-		_char_index=0
-		while [ $_char_index -lt ${#_chars} ]; do
-			_char=${_chars:$_char_index:1}
-			(( ++_char_index ))
-			if [ $_char == "$readed_key" ]; then
-				selected_word=$_char_index
-				break
-			fi
-		done
-		if [ $selected_word -gt 0 ]; then
-			break
-		fi
-	done
+	(( in_memory > 0 )) &&
+		echo "$PATH_TMP/MEMORY/$hostBackuped" ||
+		echo "$PATH_TMP/$hostBackuped"
 }
 
 function getBackupFileName()
 {
-	local _file_name="${1//\//^}"	# The file name without path. Assume the parameter is not empty.
+	local filename="${1//\//^}"	# The file name without path. Assume the parameter is not empty.
 	local _file_cat="${2}"			# The categorie of the file. Assume the parameter is not empty.
 	local _is_ramdisk="${3:-1}"		# 1 = RAM DISK, 0 = HARD DISK. 1 is the default value.
-	local _host="${4:-$host_backuped}"
+	local _host="${4:-$hostBackuped}"
 
 	local _var_name_ram="${5}"
 	local _var_name_disk="${6}"
@@ -534,23 +122,23 @@ function getBackupFileName()
 		if (( _is_ramdisk == 1 )); then
 			_root="$PATH_RamDisk"
 		else
-			_root="$PATH_BackupFolder"
+			_root="$PATH_BACKUP_FOLDER"
 		fi
 
-		echo "$_root/$STATUS_FOLDER/$_host/${_file_cat}_${_file_name}"
+		echo "$_root/$STATUS_FOLDER/$_host/${_file_cat}_${filename}"
 	else
 		if [ "$_var_name_ram" != '' ]; then
-			printf -v $_var_name_ram "$PATH_RamDisk/$STATUS_FOLDER/$_host/${_file_cat}_${_file_name}"
+			printf -v $_var_name_ram "$PATH_RamDisk/$STATUS_FOLDER/$_host/${_file_cat}_${filename}"
 		fi
 		if [ "$_var_name_disk" != '' ]; then
-			printf -v $_var_name_disk "$PATH_BackupFolder/$STATUS_FOLDER/$_host/${_file_cat}_${_file_name}"
+			printf -v $_var_name_disk "$PATH_BACKUP_FOLDER/$STATUS_FOLDER/$_host/${_file_cat}_${filename}"
 		fi
 	fi
 }
 
 function moveBackupFile()
 {
-	local _file_name="${1}"		# The file name without path. Assume the parameter is not empty.
+	local filename="${1}"		# The file name without path. Assume the parameter is not empty.
 	local _file_cat="${2}"		# The categorie of the file. Assume the parameter is not empty.
 	local _move_direction="${3:-0}"  # 0 = Ram to Disk, 1 = Disk to Ram
 	local _host="${3}"
@@ -558,9 +146,9 @@ function moveBackupFile()
 	local _source _destination
 
 	if (( _move_direction == 0 )); then
-		getBackupFileName "$_file_name" "$_file_cat" '' "$_host" '_source' '_destination'
+		getBackupFileName "$filename" "$_file_cat" '' "$_host" '_source' '_destination'
 	else
-		getBackupFileName "$_file_name" "$_file_cat" '' "$_host" '_destination' '_source'
+		getBackupFileName "$filename" "$_file_cat" '' "$_host" '_destination' '_source'
 	fi
 
 	if [ -f "$_source" ]; then
@@ -568,34 +156,23 @@ function moveBackupFile()
 	fi
 }
 
-function checkStatus()
+function updateScreenCurrentAction
 {
-	local _status_name="${1}"
-	local _full_file_name="$(getBackupFileName "$_status_name" $CAT_STATUS 0)"
+	local -r action="${1:-}"
+	local -r sub_action="${2:-}"
 
-	if [ -f "$_full_file_name" ]; then
-		echo 'Done'
-	else
-		echo 'Uncompleted'
-	fi
-}
-
-function makeStatusDone()
-{
-	local _status_name="${1}"
-	local _full_file_name="$(getBackupFileName "$_status_name" $CAT_STATUS 0)"
-
-	printf '%s %(%s)T\n' 'OK' -1 > "$_full_file_name"
-	sync
+	echo -en "${CO_GO_TOP_LEFT}$(getTimerV) ${rotationStatus:-?} ${S_BOLMA}${hostBackuped:-?}${S_NO} ${S_BOWHI}${action}${S_NO} ${S_NOWHI}${sub_action}${S_NO}${ES_CURSOR_TO_LINE_END}"
 }
 
 function showTitle()
 {
 	local _title="${1}"
-	local _state="${2:-"${A_NoAction}"}"
+	local _state="${2:-"${A_EMPTY_TAG}"}"
 
-	echo -e "$(buildTimer) ${_state} ${TS__BOLD_WHITE}==-=-== ${_title} ==-=-==${TR_ALL}"
-	if [ "$_state" != "${A_Skipped}" ]; then
+	echo -e "$(getTimerV)"
+
+	echo -e "$(buildTimer) ${_state} ${S_BOWHI}==-=-== ${_title} ==-=-==${S_R_AL}"
+	if [ "$_state" != "${A_SKIPPED}" ]; then
 		echo
 		sleep 1
 	fi
@@ -605,90 +182,18 @@ function makeBaseFolders()
 {
 	local _full_folder_name="${1}"
 
-	mkdir -p "$PATH_BackupFolder/$_full_folder_name"
+	mkdir -p "$PATH_BACKUP_FOLDER/$_full_folder_name"
 	mkdir -p "$PATH_RamDisk/$_full_folder_name"
-	rm -rf "$PATH_RamDisk/$STATUS_FOLDER/$host_folder"/[!_]*
-}
-
-function copyFolder()
-{
-	# ALL Arguments are assumed to be correctly given !!
-
-	#	${1} = Mandatory - STRING: Path        - The source full path.
-	#	${2} = Mandatory - STRING: Path        - The destination full path.
-	#	${3} = Mandatory - STRING: Folder Name - The full relative folder name to copy from source to destination.
-
-	local _folder_name="${3}"
-	local _source="${1}/$_folder_name"
-	local _destination="${2}/$_folder_name"
-
-	if [ -d "$_source" ]; then
-		local _check_destination
-
-		checkItemType "$_destination" '_check_destination'
-
-		if [ "$_check_destination" == '?' ]; then
-			mkdir "$_destination"
-		fi
-
-		if [ "$_check_destination" == '?' ] || [ "$_check_destination" == 'd' ]; then
-			local _rights=( $(stat -c "%a %u %g" "$_source") )
-
-			chown ${_rights[1]}:${_rights[2]} "$_destination"
-			chmod ${_rights[0]} "$_destination"
-		else
-			echo "function copyFolder() : "
-		fi
-	fi
-}
-
-function copyFullPath()
-{
-	local _source_path="${1}"
-	local _destination_path="${2}"
-	local _full_relative_folder_name="${3}"
-
-	if [ ! -d "$_destination_path/$_full_relative_folder_name" ]; then
-		if [ -d "$_source_path/$_full_relative_folder_name" ]; then
-			local _folders_list _folder_name
-
-			IFS='/' read -a _folders_list <<< "$_full_relative_folder_name"
-
-			_full_relative_folder_name=''
-			for _folder_name in "${_folders_list[@]}"; do
-				_full_relative_folder_name="$_full_relative_folder_name/$_folder_name"
-
-				if [ ! -d "$_destination_path/${_full_relative_folder_name:1}" ]; then
-					copyFolder "$_source_path" "$_destination_path" "${_full_relative_folder_name:1}"
-				fi
-			done
-		fi
-	fi
-}
-
-function getFileSizeV()
-{
-	local _full_file_name="${1}"
-	local _var_name="${2}"
-
-	local _file_size
-
-	if [ -f "$_full_file_name" ]; then
-		_file_size="$(stat --format=%s "$_full_file_name")"
-	else
-		_file_size=0
-	fi
-
-	printf -v ${_var_name} '%d' $_file_size
+	rm -rf "$PATH_RamDisk/$STATUS_FOLDER/$hostFolder"/[!_]*
 }
 
 function getFileSize()
 {
-	local _full_file_name="${1}"
+	local fullFilename="${1}"
 
 	local _file_size_
 
-	getFileSize "$_full_file_name" '_file_size_'
+	getFileSize "$fullFilename" '_file_size_'
 
 	echo "$_file_size_"
 }
@@ -697,32 +202,6 @@ EMPTY_SIZE='               '
 FOLDER_SIZE="      directory"
 SYMLINK_SIZE="       sym-link"
 UNKNOWN_SIZE="        ??? ???"
-function formatSizeV()
-{
-	local _size_="${1}"
-	local _padding="${2}"
-	local _var_name="${3}"
-
-	printf -v _size_ '%15d' $_size_
-
-	if [ "${_size_:9:3}" == '   ' ]; then
-		_size_="            ${TF_WHITE}${_size_:12:3}${TR_ALL}"
-	elif [ "${_size_:6:3}" == '   ' ]; then
-		_size_="         ${TF_GREEN}${_size_:9:3}${TF__WHITE}${_size_:12:3}${TR_ALL}"
-	elif [ "${_size_:3:3}" == '   ' ]; then
-		_size_="      ${TF_YELLOW}${_size_:6:3}${TF__GREEN}${_size_:9:3}${TF__WHITE}${_size_:12:3}${TR_ALL}"
-	elif [ "${_size_:0:3}" == '   ' ]; then
-		_size_="   ${TF_RED}${_size_:3:3}${TF__YELLOW}${_size_:6:3}${TF__GREEN}${_size_:9:3}${TF__WHITE}${_size_:12:3}${TR_ALL}"
-	else
-		_size_="${TF_CYAN}${_size_:0:3}${TF__RED}${_size_:3:3}${TF__YELLOW}${_size_:6:3}${TF__GREEN}${_size_:9:3}${TF__WHITE}${_size_:12:3}${TR_ALL}"
-	fi
-
-	if (( _padding == 0 )); then
-		_size_="${_size_// /}"
-	fi
-
-	printf -v $_var_name '%s' "$_size_"
-}
 
 function formatSize()
 {
@@ -734,209 +213,103 @@ function formatSize()
 	echo "$_size"
 }
 
-function checkItemType()
-{
-	local _file_name="${1}" _type
-	local _var_name="${2}"
-
-
-	if [ -e "$_file_name" ]; then
-		if [ -f "$_file_name" ]; then
-			_type='f'
-		elif [ -d "$_file_name" ]; then
-			_type='d'
-		elif [ -L "$_file_name" ]; then
-			_type='L'
-		elif [ -p "$_file_name" ]; then
-			_type='p'
-		elif [ -S "$_file_name" ]; then
-			_type='s'
-		elif [ -b "$_file_name" ]; then
-			_type='b'
-		elif [ -c "$_file_name" ]; then
-			_type='c'
-		fi
-	else
-		if [ -L "$_file_name" ]; then
-			_type='L'
-		else
-			_type='?'
-		fi
-	fi
-
-	printf -v $_var_name '%s' "$_type"
-}
-
 TIME_SIZE='[00:00:00]'
-function buildTimerV()
-{
-	local _var_name="${1}"
-
-	local __duration
-
-	printf -v __duration '%(%s)T' -1
-	__duration=$(( __duration - SCRIPT_START_TIME ))
-
-	TZ=UTC printf -v "$_var_name" "%(${TF_WHITE}[${TF__YELLOW}%H${TF__WHITE}:${TF__LGRAY}%M:${TF__DGRAY}%S${TF__WHITE}]${TR_ALL})T" $__duration
-}
-
 function buildTimer()
 {
-	local _timer
+	local timer
 
-	buildTimerV '_timer'
+	getTimerV 'timer'
 
-	echo "$_timer"
+	echo "$timer"
 }
 
 function getPercentageV()
 {
-	local _value="${1}"
-	local _divisor="${2}"
-	local _var_name="${3}"
+	local -r return_var_name="${1}"
+	local _value="${2}"
+	local _divisor="${3}"
 
 	local _t1 _t2 _P1 _P2
 
 	(( _divisor = _divisor ? _divisor : 1, _t1 = _value * 100, _t2 = _t1 % _divisor, _P1 = _t1 / _divisor, _P2 = (_t2 * 10000) / _divisor, 1 ))
 
-	printf -v $_var_name '%3d.%04d%%' $_P1 $_P2
-}
-
-function shortenFileNameV()
-{
-	local _full_file_name="${1}"
-	local _max_size="${2}"
-	local _var_name="${3}"
-
-	if [ ${#_full_file_name} -gt $_max_size ]; then
-		local _folder_slash=''
-
-		if [ "${_full_file_name:(-1)}" == '/' ]; then
-			_folder_slash='/'
-			_full_file_name="${_full_file_name%%/}"
-		fi
-
-		local _file_name="${_full_file_name##*/}$_folder_slash"
-		local _path_name="${_full_file_name%/*}/"
-		local _file_name_size=${#_file_name}
-		local _path_name_size=${#_path_name}
-
-		local _cut_size_part1 _cut_size_part2 _cut_size=$_file_name_size
-
-		if [ $_file_name_size -gt 48 ]; then
-			(( 	_cut_size = _max_size - (_path_name_size + 48),
-				_cut_size = _cut_size > 0 ? _cut_size + 48 : 48,
-				_cut_size_part1 = (_cut_size / 2) - 3 + (_cut_size % 2),
-				_cut_size_part2 = (_cut_size / 2) ))
-
-			_file_name="${_file_name:0:$_cut_size_part1}...${_file_name:(-$_cut_size_part2)}"
-		fi
-
-		(( _cut_size = _max_size - _cut_size ))
-
-		if [ $_path_name_size -gt $_cut_size ]; then
-			(( 	_cut_size_part1 = (_cut_size / 2) - 3 + (_cut_size % 2),
-				_cut_size_part2 = (_cut_size / 2) ))
-
-			_path_name="${_path_name:0:$_cut_size_part1}...${_path_name:(-$_cut_size_part2)}"
-		fi
-
-		printf -v $_var_name '%s%s' "$_path_name" "$_file_name"
-	else
-		printf -v $_var_name '%s' "$_full_file_name"
-	fi
+	printf -v $return_var_name '%3d.%04d%%' $_P1 $_P2
 }
 
 function getUpdateFlagsV()
 {
-	local _flags_="${1//./ }"
-	local _var_name="${2}"
+	local -r  return_var_name="${1}"
+	local flags_="${2//./ }"
 
-	if [ "${_flags_:0:6}" != '      ' ]; then
-		_flags_="${_flags_^^}"
-		printf -v $_var_name '%s' "${TF_RED}${_flags_:0:1}${TF__YELLOW}${_flags_:1:1}${TF__YELLOW}${_flags_:2:1}${TF__MAGENTA}${_flags_:3:1}${TF__LMAGENTA}${_flags_:4:1}${TF__LMAGENTA}${_flags_:5:1}${TR_ALL}"
+	if [ "${flags_:0:6}" != '      ' ]; then
+		flags_="${flags_^^}"
+		printf -v $return_var_name '%s' "${S_NORED}${flags_:0:1}${S_YEL}${flags_:1:1}${S_YEL}${flags_:2:1}${S_MAG}${flags_:3:1}${S_LMA}${flags_:4:1}${S_LMA}${flags_:5:1}${S_R_AL}"
 	else
-		printf -v $_var_name '%s' "${TB_RED}${TF__YELLOW}??????${TR_ALL}"
+		printf -v $return_var_name '%s' "${S_NOYEL}${S_B_RED}??????${S_R_AL}"
 	fi
 }
 
 function getIsExcludedV()
 {
-	local _full_file_name="${1}"
-	local _excluded_files_list="${2}"
-	local _var_name="${3}"
+	local -r  return_var_name="${1}"
+	local full_filename="${2}"
+	local excluded_files_list="${3}"
 
-	local _is_excluded='r'
+	local is_excluded='r'
 
-	local _full_file_name_size=${#_full_file_name}
-	local _excluded_path _excluded_path_size
+	local full_filename_size=${#full_filename}
+	local excluded_path excluded_path_size
 
-	while read _excluded_path; do
-		if [ "$_excluded_path" == '' ]; then
-			continue
-		fi
+	while read excluded_path; do
+		[[ -z "$excluded_path" ]] && continue
 
-		_excluded_path_size=${#_excluded_path}
+		excluded_path_size=${#excluded_path}
 
-		if [ $_full_file_name_size -lt $_excluded_path_size ]; then
-			continue
-		fi
+		(( full_filename_size < excluded_path_size )) && continue
 
-		if [ "$_excluded_path" == "${_full_file_name:0:$_excluded_path_size}" ]; then
-			if [ "${_full_file_name:${_excluded_path_size}:1}" == '/' ]; then
-				_is_excluded='e'
+		[[ "$excluded_path" == "${full_filename:0:excluded_path_size}" ]] && {
+			if [[ "${full_filename:excluded_path_size:1}" == '/' ]]; then
+				is_excluded='e'
 				break
-			elif [ $_full_file_name_size -eq $_excluded_path_size ]; then
-				_is_excluded='e'
+			elif (( full_filename_size == excluded_path_size )); then
+				is_excluded='e'
 				break
 			fi
-		fi
-	done < "$_excluded_files_list"
+		}
+	done < "$excluded_files_list"
 
-	printf -v $_var_name '%s' $_is_excluded
-}
-
-function initVariablesState_Rotation()
-{
-	RotationNewDay=0
-	RotationNewWeek=0
-	RotationNewMonth=0
-	RotationNewYear=0
-	rotation_status=''
-	rotation_status_size=''
-	DayOfWeek=0
-	RotationLastDate=''
+	printf -v $return_var_name '%s' $is_excluded
 }
 
 function saveVariablesState_Rotation()
 {
-	local _full_file_name="$(getBackupFileName 'Rotation' "$CAT_VARIABLES_STATE" 0)"
+	local fullFilename="$(getBackupFileName 'Rotation' "$CAT_VARIABLES_STATE" 0)"
 
 	echo "
-	$RotationNewDay
-	$RotationNewWeek
-	$RotationNewMonth
-	$RotationNewYear
-	${rotation_status// /%}
-	${rotation_status_size// /%}
-	$DayOfWeek
-	${RotationLastDate// /%}" > "$_full_file_name"
+	$isNewDay
+	$isNewWeek
+	$isNewMonth
+	$isNewYear
+	${rotationStatus// /%}
+	${rotationStatusSize// /%}
+	$dayOfWeek
+	${backupLastDateText// /%}" > "$fullFilename"
 }
 
 function loadVariablesState_Rotation()
 {
-	local _full_file_name="$(getBackupFileName 'Rotation' "$CAT_VARIABLES_STATE" 0)"
+	local fullFilename="$(getBackupFileName 'Rotation' "$CAT_VARIABLES_STATE" 0)"
 	local _values
 
-	_values=( $(cat "$_full_file_name") )
-	RotationNewDay="${_values[0]}"
-	RotationNewWeek="${_values[1]}"
-	RotationNewMonth="${_values[2]}"
-	RotationNewYear="${_values[3]}"
-	rotation_status="${_values[4]//%/ }"
-	rotation_status_size="${_values[5]//%/ }"
-	DayOfWeek="${_values[6]}"
-	RotationLastDate="${_values[7]//%/ }"
+	_values=( $(cat "$fullFilename") )
+	isNewDay="${_values[0]}"
+	isNewWeek="${_values[1]}"
+	isNewMonth="${_values[2]}"
+	isNewYear="${_values[3]}"
+	rotationStatus="${_values[4]//%/ }"
+	rotationStatusSize="${_values[5]//%/ }"
+	dayOfWeek="${_values[6]}"
+	backupLastDateText="${_values[7]//%/ }"
 }
 
 function initVariablesState_Rotation_Statistics()
@@ -949,21 +322,21 @@ function initVariablesState_Rotation_Statistics()
 
 function saveVariablesState_Rotation_Statistics()
 {
-	local _full_file_name="$(getBackupFileName "Count_GlobalRotation" "$CAT_VARIABLES_STATE" 0)"
+	local fullFilename="$(getBackupFileName "Count_GlobalRotation" "$CAT_VARIABLES_STATE" 0)"
 
 	echo "
 	$count_files_trashed
 	$count_size_trashed
 	$count_files_rotation
-	$count_size_rotation" > "$_full_file_name"
+	$count_size_rotation" > "$fullFilename"
 }
 
 function loadVariablesState_Rotation_Statistics()
 {
-	local _full_file_name="$(getBackupFileName "Count_GlobalRotation" "$CAT_VARIABLES_STATE" 0)"
+	local fullFilename="$(getBackupFileName "Count_GlobalRotation" "$CAT_VARIABLES_STATE" 0)"
 	local _values
 
-	_values=( $(cat "$_full_file_name") )
+	_values=( $(cat "$fullFilename") )
 	count_files_trashed="${_values[0]}"
 	count_size_trashed="${_values[1]}"
 	count_files_rotation="${_values[2]}"
@@ -972,77 +345,77 @@ function loadVariablesState_Rotation_Statistics()
 
 function initVariablesState_Step_1_Statistics()
 {
-	file_count_total=0
-	file_count_added=0
-	file_count_updated1=0
-	file_count_updated2=0
-	file_count_removed=0
-	file_count_excluded=0
-	file_count_uptodate=0
-	file_count_skipped=0
+	fileCountTotal=0
+	fileCountAdded=0
+	fileCountUpdated1=0
+	fileCountUpdated2=0
+	fileCountRemoved=0
+	fileCountExcluded=0
+	fileCountUptodate=0
+	fileCountSkipped=0
 
-	file_count_size_total=0
-	file_count_size_added=0
-	file_count_size_updated1=0
-	file_count_size_updated2=0
-	file_count_size_removed=0
-	file_count_size_excluded=0
-	file_count_size_uptodate=0
-	file_count_size_skipped=0
+	fileCountSizeTotal=0
+	fileCountSizeAdded=0
+	fileCountSizeUpdated1=0
+	fileCountSizeUpdated2=0
+	fileCountSizeRemoved=0
+	fileCountSizeExcluded=0
+	fileCountSizeUptodate=0
+	fileCountSizeSkipped=0
 }
 
 function saveVariablesState_Step_1_Statistics()
 {
-	local _full_file_name="$(getBackupFileName "Count_Step_1" "$CAT_STATISTICS" 0)"
+	local fullFilename="$(getBackupFileName "Count_Step_1" "$CAT_STATISTICS" 0)"
 
 	echo "
-	$file_count_total
-	$file_count_added
-	$file_count_updated1
-	$file_count_updated2
-	$file_count_removed
-	$file_count_excluded
-	$file_count_uptodate
-	$file_count_skipped
-	$file_count_size_total
-	$file_count_size_added
-	$file_count_size_updated1
-	$file_count_size_updated2
-	$file_count_size_removed
-	$file_count_size_excluded
-	$file_count_size_uptodate
-	$file_count_size_skipped" > "$_full_file_name"
+	$fileCountTotal
+	$fileCountAdded
+	$fileCountUpdated1
+	$fileCountUpdated2
+	$fileCountRemoved
+	$fileCountExcluded
+	$fileCountUptodate
+	$fileCountSkipped
+	$fileCountSizeTotal
+	$fileCountSizeAdded
+	$fileCountSizeUpdated1
+	$fileCountSizeUpdated2
+	$fileCountSizeRemoved
+	$fileCountSizeExcluded
+	$fileCountSizeUptodate
+	$fileCountSizeSkipped" > "$fullFilename"
 }
 
 function loadVariablesState_Step_1_Statistics()
 {
-	local _full_file_name="$(getBackupFileName "Count_Step_1" "$CAT_STATISTICS" 0)"
+	local fullFilename="$(getBackupFileName "Count_Step_1" "$CAT_STATISTICS" 0)"
 	local _values
 
-	_values=( $(cat "$_full_file_name") )
-	file_count_total="${_values[0]}"
-	file_count_added="${_values[1]}"
-	file_count_updated1="${_values[2]}"
-	file_count_updated2="${_values[3]}"
-	file_count_removed="${_values[4]}"
-	file_count_excluded="${_values[5]}"
-	file_count_uptodate="${_values[6]}"
-	file_count_skipped="${_values[7]}"
+	_values=( $(cat "$fullFilename") )
+	fileCountTotal="${_values[0]}"
+	fileCountAdded="${_values[1]}"
+	fileCountUpdated1="${_values[2]}"
+	fileCountUpdated2="${_values[3]}"
+	fileCountRemoved="${_values[4]}"
+	fileCountExcluded="${_values[5]}"
+	fileCountUptodate="${_values[6]}"
+	fileCountSkipped="${_values[7]}"
 
-	file_count_size_total="${_values[8]}"
-	file_count_size_added="${_values[9]}"
-	file_count_size_updated1="${_values[10]}"
-	file_count_size_updated2="${_values[11]}"
-	file_count_size_removed="${_values[12]}"
-	file_count_size_excluded="${_values[13]}"
-	file_count_size_uptodate="${_values[14]}"
-	file_count_size_skipped="${_values[15]}"
+	fileCountSizeTotal="${_values[8]}"
+	fileCountSizeAdded="${_values[9]}"
+	fileCountSizeUpdated1="${_values[10]}"
+	fileCountSizeUpdated2="${_values[11]}"
+	fileCountSizeRemoved="${_values[12]}"
+	fileCountSizeExcluded="${_values[13]}"
+	fileCountSizeUptodate="${_values[14]}"
+	fileCountSizeSkipped="${_values[15]}"
 }
 
 function initVariablesState_Step_2()
 {
-	progress_total_item_1=$file_count_excluded
-	progress_total_size_1=$file_count_size_excluded
+	progress_total_item_1=$fileCountExcluded
+	progress_total_size_1=$fileCountSizeExcluded
 	progress_current_item_1_processed=0
 	progress_current_size_1_processed=0
 	progress_current_item_1_remaining=$progress_total_item_1
@@ -1057,13 +430,13 @@ function initVariablesState_Step_2_Statistics()
 
 function showProgress_CountFiles()
 {
-	local _timer _size _count
+	local timer _size _count
 
-	buildTimerV _timer
-	formatSizeV $_count_size 1 '_size'
-	printf -v _count '%9d' $_count_files
+	getTimerV timer
+	formatSizeV $count_size 1 '_size'
+	printf -v _count '%9d' $count_files
 
-	echo -ne "$_timer Count : $_count $_size - $_full_relative_folder_name${TM_ClearEndLine}\r"
+	echo -ne "$timer Count : $_count $_size - $_full_relative_folder_name${ES_CURSOR_TO_LINE_END}\r"
 }
 
 function countFiles()
@@ -1072,14 +445,14 @@ function countFiles()
 
 	if [ "$(checkStatus "Count_$_full_relative_folder_name")" == 'Uncompleted' ]; then
 
-		local _source_folder="$PATH_BackupFolder/$_full_relative_folder_name"
+		local source_folder="$PATH_BACKUP_FOLDER/$_full_relative_folder_name"
 		local _skip_output=0
 
 		local _count_full_file_name="$(getBackupFileName "Count_$_full_relative_folder_name" "$CAT_STATISTICS" 0)"
 		local _log_full_file_name="$(getBackupFileName "Count_LOG_$_full_relative_folder_name" "$CAT_STATISTICS")"
 		echo -n '' > "$_log_full_file_name"
 
-		local _file_data _file_size _count_files=0 _count_size=0
+		local file_data file_size count_files=0 count_size=0
 
 		showProgress_CountFiles
 
@@ -1087,20 +460,20 @@ function countFiles()
 		exec {pipe_id[2]}>"$_log_full_file_name"
 
 		{
-			find -P "$_source_folder" -type f,l,p,s,b,c -printf '%12s %y %3d %P\n'
+			find -P "$source_folder" -type f,l,p,s,b,c -printf '%12s %y %3d %P\n'
 			echo ':END:'
 		} >&${pipe_id[1]} &
 
-		while IFS= read -u ${pipe_id[1]} _file_data; do
-			if [ ':END:' == "$_file_data" ]; then
+		while IFS= read -u ${pipe_id[1]} file_data; do
+			if [ ':END:' == "$file_data" ]; then
 				break
 			fi
 
-			echo "$_file_data" >&${pipe_id[2]}
+			echo "$file_data" >&${pipe_id[2]}
 
-			_file_size=${_file_data:0:12}
+			file_size=${file_data:0:12}
 
-			(( _count_size += _file_size, ++_count_files ))
+			(( count_size += file_size, ++count_files ))
 
 			if [ $(( ++_skip_output % 653 )) -eq 0 ]; then
 				showProgress_CountFiles
@@ -1111,11 +484,11 @@ function countFiles()
 		exec {pipe_id[2]}>&-
 
 		showProgress_CountFiles
-		if [ $_count_files -ne 0 ]; then
+		if [ $count_files -ne 0 ]; then
 			echo
 		fi
 
-		echo "$_count_files $_count_size" > "$_count_full_file_name"
+		echo "$count_files $count_size" > "$_count_full_file_name"
 		keepBackupFile "Count_log_$_full_relative_folder_name" "$CAT_STATISTICS"
 
 		makeStatusDone "Count_$_full_relative_folder_name"
@@ -1124,265 +497,271 @@ function countFiles()
 
 function showProgress_Rotation()
 {
-	local _timer _file_name_text _size1 _size2 _size3 _size4
+	local timer file_name_text size1 size2 size3 size4
 
-	buildTimerV _timer
-	shortenFileNameV "/$_file_name" "$_max_file_name_size" '_file_name_text'
-	formatSizeV $_file_size 1 _size1
-	formatSizeV $count_size_trashed 0 _size2
-	formatSizeV $_count_size 0 _size3
-	formatSizeV $count_size_rotation 0 _size4
+	getTimerV 'timer'
+	shortenFileNameV 'file_name_text' "/$filename" $max_file_name_size
+	formatSizeV 'size1' $file_size 15
+	formatSizeV 'size2' $count_size_trashed
+	formatSizeV 'size3' $count_size
+	formatSizeV 'size4' $count_size_rotation
 
-	echo -e "$_timer $_action $_size1 ${_action_color}$_file_name_text${TR_ALL}${TM_ClearEndLine}"
-	echo -e "$_timer $_action_context : ${TF_RED}${count_files_trashed} $_size2 - ${TF_WHITE}${_count_files} $_size3 / ${TF_WHITE}${count_files_rotation} $_size4 ${TR_ALL}${TM_ClearEndLine}"
-	echo -ne "$_timer $rotation_status $RotationLastDate\r${TM_Up1}"
+	echo -e "$timer $action $size1 ${action_color}$file_name_text${S_R_AL}${ES_CURSOR_TO_LINE_END}"
+	echo -e "$timer $action_context : ${S_NORED}${count_files_trashed} $size2 - ${S_NOWHI}${count_files} $size3 / ${S_NOWHI}${count_files_rotation} $size4 ${S_R_AL}${ES_CURSOR_TO_LINE_END}"
+	echo -ne "$timer $rotationStatus $backupLastDateText\r${CO_UP_1}"
 }
 
-function removeTrashedContent()
+function removeTrashedContent
 {
-	if [ "$(checkStatus 'Rotation_Trashed')" == 'Uncompleted' ]; then
-		local _source_folder="$PATH_BackupFolder/_Trashed_"
-		local _file_data _file_name='/' _file_size=0 _count_files=0 _count_size=0
+	if checkSectionStatus 'Rotation-Trash' "$hostBackuped"; then
+		local -r source="$PATH_BACKUP_FOLDER/$TRASH_FOLDER"
 
-		local _count_full_file_name="$(getBackupFileName "Count_TrashedContent" "$CAT_STATISTICS" 0)"
-		local _log_full_file_name="$(getBackupFileName "Count_LOG_TrashedContent" "$CAT_STATISTICS")"
+		local -i canal canal_stat
 
-		local _max_file_name_size="$TIME_SIZE ${A_ActionSpace} $EMPTY_SIZE "
-		(( _max_file_name_size = $(tput cols) - ${#_max_file_name_size} ))
+		local -r log_filename="Rotation-Trashed.files.log"
 
-		exec {pipe_id[1]}<>"$MAIN_PIPE"
-		exec {pipe_id[2]}>"$_log_full_file_name"
+		local max_file_name_size="$TIME_SIZE ${A_TAG_LENGTH_SIZE} $EMPTY_SIZE "
 
-		{
-			find -P "$_source_folder" -type f,l,p,s,b,c -printf "%12s %y %3d %P\n" -delete
-			echo ':END:'
-		} >&${pipe_id[1]} &
+		(( max_file_name_size = $(tput cols) - ${#max_file_name_size} ))
 
-		local _action="${A_Removed}"
-		local _action_color="${TF_RED}"
-		local _action_context="Cleaning the trashed content"
+		exec {canal_stat}>"$pathWorkingDirectoryRAM/$log_filename"
 
-		while IFS= read -u ${pipe_id[1]} _file_data; do
-			if [ ':END:' == "$_file_data" ]; then
-				break
-			fi
+		local action="${A_REMOVED_R}"
+		local action_color="${S_NORED}"
+		local action_context="Cleaning the trashed content"
 
-			echo "$_file_data" >&${pipe_id[2]}
+		local    file_data filename
+		local -i file_size count_files=0 count_size=0
 
-			_file_size=${_file_data:0:12}
-			_file_name="_Trashed_/${_file_data:19}"
+		while IFS= read -u ${canal} file_data; do
+			echo "$file_data" >&${canal_stat}
 
-			(( count_size_trashed += _file_size, ++count_files_trashed ))
+			file_size=${file_data:0:12}	# TODO : in read
+			filename="$TRASH_FOLDER/${file_data:19}"
 
-			rm -f "$_source_folder/$_file_name"
+			(( count_size_trashed += file_size, ++count_files_trashed ))
 
 			showProgress_Rotation
-		done
+		done {canal}< <(find -P "$source" -type f,l,p,s,b,c -printf "%12s %y %3d %P\n" -delete)
 
-		exec {pipe_id[1]}>&-
-		exec {pipe_id[2]}>&-
+		exec {canal_stat}>&-
 
-		echo "$count_files_trashed $count_size_trashed" > "$_count_full_file_name"
-		keepBackupFile "Count_log_TrashedContent" "$CAT_STATISTICS"
-		saveVariablesState_Rotation_Statistics
+		echo "$count_files_trashed $count_size_trashed" >> "$PATHFILE_ROTATION_STATISTICS"
+		mv "$pathWorkingDirectoryRAM/$log_filename" "$pathWorkingDirectory/$log_filename"
 
-		echo -ne "${TM_ClearLine}\n${TM_ClearLine}\r"
+		echo -ne "${ES_ENTIRE_LINE}\n${ES_ENTIRE_LINE}\r"
 
-		makeStatusDone 'Rotation_Trashed'
-	else
-		echo -e "$(buildTimer) ${A_Skipped} : Cleaning the trashed content"
+		makeSectionStatusDone 'Rotation-Trash' "$hostBackuped"
 	fi
 }
 
 function rotateFolder()
 {
-	local _source="${1}"
-	local _destination="${2}"
+	local -r source="${1}"
+	local -r destination="${2}"
 
-	if [ "$(checkStatus "Rotation_$_source")" == 'Uncompleted' ]; then
-		local _source_folder="$PATH_BackupFolder/${_source}"
-		local _destination_folder="$PATH_BackupFolder/${_destination}"
-		local _excluded_folder="$PATH_BackupFolder/_Trashed_/Rotation/${destination}"
+	if checkSectionStatus "Rotation-$source" "$hostBackuped"; then
+		local host_folder source_folder destination_folder overwrited_files_folder log_filename
+		local -i canal canal_stat conflict
 
-		local _file_data _file_name='/' _file_size=0 _count_files=0 _count_size=0 _path_name _check_dest
+		local max_file_name_size="$TIME_SIZE ${A_TAG_LENGTH_SIZE} $EMPTY_SIZE "
 
-		local _count_full_file_name="$(getBackupFileName "Count_Rotation_${_source}" "$CAT_STATISTICS" 0)"
-		local _log_full_file_name="$(getBackupFileName "Count_LOG_Rotation_${_source}" "$CAT_STATISTICS")"
+		(( max_file_name_size = $(tput cols) - ${#max_file_name_size} ))
 
-		local _action='' _conflict _action_color
-		local _action_context="Rotation of ${TF_WHITE}${_source}${TR_ALL} in ${_destination}"
+		local action action_color action_context file_data filename path_name check_dest
+		local -i file_size count_files count_size
 
-		local _max_file_name_size="$TIME_SIZE ${A_ActionSpace} $EMPTY_SIZE "
-		(( _max_file_name_size = $(tput cols) - ${#_max_file_name_size} ))
 
-		exec {pipe_id[1]}<>"$MAIN_PIPE"
-		exec {pipe_id[2]}>"$_log_full_file_name"
+		for host_folder in "${HOSTS_LIST[@]}"; do
+			if checkSectionStatus "Rotation-$host_folder-$source" "$hostBackuped"; then
+				source_folder="$PATH_BACKUP_FOLDER/$host_folder/${source}"
+				[[ "$destination" == "$TRASH_FOLDER" ]] &&
+					destination_folder="$PATH_BACKUP_FOLDER/$TRASH_FOLDER/Rotation/$host_folder/Year-5" ||
+					destination_folder="$PATH_BACKUP_FOLDER/$host_folder/${destination}"
+				overwrited_files_folder="$PATH_BACKUP_FOLDER/$TRASH_FOLDER/Rotation/$host_folder/${destination}"
 
-		{
-			find -P "$_source_folder" -type f,l,p,s,b,c -printf '%12s %y %3d %P\n'
-			echo ':END:'
-		} >&${pipe_id[1]} &
+				log_filename="Rotation-$host_folder-$source.files.log"
 
-		while IFS= read -u ${pipe_id[1]} _file_data; do
-			if [ ':END:' == "$_file_data" ]; then
-				break
+				exec {canal_stat}>"$pathWorkingDirectoryRAM/$log_filename"
+
+				action_context="Rotation of ($host_folder) ${S_NOWHI}${source}${S_R_AL} in ${destination}"
+
+				count_files=0
+				count_size=0
+
+				while IFS= read -u ${canal} file_data; do
+					file_size=${file_data:0:12}
+					filename="${file_data:19}"
+					path_name="${filename%/*}"
+					getFileTypeV 'check_dest' "$destination_folder/$filename"
+
+					if [[ "$check_dest" != '   ' ]]; then
+						clonePathDetails "$destination_folder" "$overwrited_files_folder" "$path_name"
+						mv -f "$destination_folder/$filename" "$overwrited_files_folder/$filename"
+
+						conflict=1
+						action="${A_BACKUPED_G}"
+						action_color="${S_BOLGR}"
+					else
+						conflict=0
+						action="${A_MOVED_G}"
+						action_color="${S_NOGRE}"
+					fi
+
+					echo "$conflict $file_data" >&${canal_stat}
+
+					(( count_size_rotation += file_size, ++count_files_rotation, count_size += file_size, ++count_files ))
+
+					[[ -n "$path_name" ]] &&
+						clonePathDetails "$source_folder" "$destination_folder" "$path_name"
+					mv -f "$source_folder/$filename" "$destination_folder/$filename"
+
+					filename="$host_folder/$source/$filename"
+					showProgress_Rotation
+				done {canal}< <(find -P "$source_folder" -type f,l,p,s,b,c -printf '%12s %y %3d %P\n')
+
+				exec {canal_stat}>&-
+
+				echo "$count_files_rotation $count_size_rotation" >> "$PATHFILE_ROTATION_STATISTICS"
+				mv "$pathWorkingDirectoryRAM/$log_filename" "$pathWorkingDirectory/$log_filename"
+
+				echo -ne "${ES_ENTIRE_LINE}\n${ES_ENTIRE_LINE}\r"
+
+				makeSectionStatusDone "Rotation-$host_folder-$source" "$hostBackuped"
 			fi
-
-			_file_size=${_file_data:0:12}
-			_file_name="${_file_data:19}"
-			_path_name="${_file_name%/*}"
-			checkItemType "$_destination_folder/$_file_name" '_check_dest'
-
-			if [ "$_check_dest" != "?" ]; then
-
-				copyFullPath "$_destination_folder" "$_excluded_folder" "$_path_name"
-				mv -f "$_destination_folder/$_file_name" "$_excluded_folder/$_file_name"
-
-				_conflict=1
-				_action="${A_Backuped}"
-				_action_color="${TF_YELLOW}"
-			else
-				_conflict=0
-				_action="${A_Moved}"
-				_action_color="${TF_GREEN}"
-			fi
-
-			echo "$_conflict $_file_data" >&${pipe_id[2]}
-
-			(( count_size_rotation += _file_size, ++count_files_rotation, _count_size += _file_size, ++_count_files ))
-
-			copyFullPath "$_source_folder" "$_destination_folder" "$_path_name"
-			mv -f "$_source_folder/$_file_name" "$_destination_folder/$_file_name"
-
-			_file_name="$_source/$_file_name"
-			showProgress_Rotation
 		done
 
-		exec {pipe_id[1]}>&-
-		exec {pipe_id[2]}>&-
-
-		echo "$_count_files $_count_size" > "$_count_full_file_name"
-		keepBackupFile "Count_LOG_Rotation_${_source}" "$CAT_STATISTICS"
-		saveVariablesState_Rotation_Statistics
-
-		echo -ne "${TM_ClearLine}\n${TM_ClearLine}\r"
-
-		makeStatusDone "Rotation_$_source"
-	else
-		echo -e "$(buildTimer) ${A_Skipped} : Rotation of ${TF_WHITE}${_source}${TR_ALL} in ${_destination}"
+		makeSectionStatusDone "Rotation-$source" "$hostBackuped"
 	fi
 }
 
 function openFilesListsSpliter()
 {
-	local _dest_file_name="${1}"
-	local _dest_file_canal="${2}"
+	local -r return_var_name="${1}"
+	local -r dest_file_name="${2}"
 
-	local _pipes_file _canal _output_file_name
-	local _file_data _file_name='/' _file_size=0 _min_size _max_size
+	local -i canal_main
 
-	_pipes_file="$(getBackupFileName "${_dest_file_name}-${_dest_file_canal}" "PIPE" 1 "PIPES")"
-	rm -f "$_pipes_file"
-	mkfifo "$_pipes_file"
-	exec {pipe_id[$_dest_file_canal]}<>"$_pipes_file"
+	local -r pipe_filename="$pathWorkingDirectoryRAM/${dest_file_name}.pipe"
 
-	{
-		for _canal in {1..9}; do
-			_output_file_name="$(getBackupFileName "${_dest_file_name}-${_canal}" "$CAT_FILESLIST" 1)"
+	rm -f "$pipe_filename"
+	mkfifo "$pipe_filename"
+	exec {canal_main}<>"$pipe_filename"
 
-			echo -n '' > "$_output_file_name"
-			exec {pipe_id[$_canal]}>"$_output_file_name"
+	printf -v $return_var_name '%d' $canal_main
+
+	{	# in a subshell here...
+		declare -i index
+		declare    output_filename
+		declare -ai canals=( )
+
+		for index in {1..9}; do
+			output_filename="$pathWorkingDirectoryRAM/${dest_file_name}-$index.files"
+
+# 			echo -n '' > "$output_filename"
+			rm -f "$output_filename"
+			exec {canals[index]}>"$output_filename"
 		done
 
-		while IFS= read -u ${pipe_id[$_dest_file_canal]} _file_data; do
-			if [ ':END:' == "$_file_data" ]; then
-				break
-			fi
-			_file_size="${_file_data:0:12}"
-			_file_name="${_file_data:13}"
+		declare file_data filename
+		declare file_size
 
-			if (( _file_size < 1000 )); then
-				echo "$_file_size $_file_name" >&${pipe_id[1]}
-			elif (( _file_size < 10000 )); then
-				echo "$_file_size $_file_name" >&${pipe_id[2]}
-			elif (( _file_size < 100000 )); then
-				echo "$_file_size $_file_name" >&${pipe_id[3]}
-			elif (( _file_size < 1000000 )); then
-				echo "$_file_size $_file_name" >&${pipe_id[4]}
-			elif (( _file_size < 10000000 )); then
-				echo "$_file_size $_file_name" >&${pipe_id[5]}
-			elif (( _file_size < 100000000 )); then
-				echo "$_file_size $_file_name" >&${pipe_id[6]}
-			elif (( _file_size < 1000000000 )); then
-				echo "$_file_size $_file_name" >&${pipe_id[7]}
-			elif (( _file_size < 10000000000 )); then
-				echo "$_file_size $_file_name" >&${pipe_id[8]}
+		pipeReceivedEnd=0
+		pipeExpectedEnd=1
+
+		while IFS= read -t 60 -u ${canal_main} file_data || checkLoopFail; do
+			[[ -z "$file_data" ]] && continue
+			checkLoopEnd "$file_data" || { (( $? == 1 )) && break || continue; }
+
+			file_size="${file_data:0:12}"
+			filename="${file_data:13}"
+
+			if (( file_size < 1000 )); then
+				echo "$file_size $filename" >&${canals[1]}
+			elif (( file_size < 10000 )); then
+				echo "$file_size $filename" >&${canals[2]}
+			elif (( file_size < 100000 )); then
+				echo "$file_size $filename" >&${canals[3]}
+			elif (( file_size < 1000000 )); then
+				echo "$file_size $filename" >&${canals[4]}
+			elif (( file_size < 10000000 )); then
+				echo "$file_size $filename" >&${canals[5]}
+			elif (( file_size < 100000000 )); then
+				echo "$file_size $filename" >&${canals[6]}
+			elif (( file_size < 1000000000 )); then
+				echo "$file_size $filename" >&${canals[7]}
+			elif (( file_size < 10000000000 )); then
+				echo "$file_size $filename" >&${canals[8]}
 			else
-				echo "$_file_size $_file_name" >&${pipe_id[9]}
+				echo "$file_size $filename" >&${canals[9]}
 			fi
 		done
 
-		for _canal in {1..9}; do
-			exec {pipe_id[$_canal]}>&-
+		for index in {1..9}; do
+			exec {canals[index]}>&-
 		done
 	} &
 }
 
 function closeFilesListsSpliter()
 {
-	local _dest_file_name="${1}"
-	local _dest_file_canal="${2}"
+	local -r dest_file_name="${1}"
+	local -r canal_main="${2}"
 
-	local _pipes_file _canal _output_file_name
-	local _file_data _file_name='/' _file_size=0 _min_size _max_size
+	local -r pipe_filename="$pathWorkingDirectoryRAM/${dest_file_name}.pipe"
 
-	_pipes_file="$(getBackupFileName "${_dest_file_name}-${_dest_file_canal}" "PIPE" 1 "PIPES")"
-	exec {pipe_id[$_dest_file_canal]}>&-
-	rm -f "$_pipes_file"
+	echo "$LOOP_END_TAG" >&${canal_main}
+	sleep 0.5
+	exec {canal_main}>&-
+	rm -f "$pipe_filename"
 
-	for _canal in {1..9}; do
-		keepBackupFile "${_dest_file_name}-${_canal}" "$CAT_FILESLIST"
+	local -i index
+	local    output_filename
+
+	for index in {1..9}; do
+		output_filename="${dest_file_name}-$index.files"
+		mv "$pathWorkingDirectoryRAM/$output_filename" "$pathWorkingDirectory/$output_filename"
 	done
 }
 
 function updateLastAction()
 {
-	local _action="${1}"
+	local action="${1}"
 
-	if (( __LastAction != _action )); then
-		__LastAction=$_action
-		case $_action in
+	if (( lastAction != action )); then
+		lastAction=$action
+		case $action in
 			1)
-				action_tag="$A_UpToDate"
-				action_color="${TF_GREEN}"
+				action_tag="$A_UP_TO_DATE_G"
+				action_color="${S_NOGRE}"
 				action__flags='      '
 				;;
 			2)
-				action_tag="$A_Updated"
-				action_color="${TF_YELLOW}"
+				action_tag="$A_UPDATED_Y"
+				action_color="${S_NOYEL}"
 				;;
 			3)
-				action_tag="$A_Updated"
-				action_color="${TF_YELLOW}"
+				action_tag="$A_UPDATED_Y"
+				action_color="${S_NOYEL}"
 				;;
 			4)
-				action_tag="$A_Skipped"
-				action_color="${TF_CYAN}"
+				action_tag="$A_SKIPPED"
+				action_color="${S_NOCYA}"
 				action__flags='      '
 				;;
 			51)
-				action_tag="$A_Removed"
-				action_color="${TF_RED}"
+				action_tag="$A_REMOVED_R"
+				action_color="${S_NORED}"
 				action__flags='      '
 				;;
 			52)
-				action_tag="$A_Excluded"
-				action_color="${TF_LRED}"
+				action_tag="$A_EXCLUDED_R"
+				action_color="${S_NOLRE}"
 				action__flags='      '
 				;;
 			6)
-				action_tag="$A_Added"
-				action_color="${TF_LBLUE}"
+				action_tag="$A_ADDED_B"
+				action_color="${S_NOLBL}"
 				action__flags='      '
 				;;
 
@@ -1392,184 +771,167 @@ function updateLastAction()
 
 function showProgress_Step_1()
 {
-	local _check_timer _file_name_text _file_size
+	local check_timer filename_text
 
-	printf -v _check_timer '%(%s)T'
-	if (( $_check_timer > $__LastTime )); then
-		__LastTime=$_check_timer
+	printf -v check_timer '%(%s)T'
+	(( check_timer > lastTime )) && {
+		lastTime=$check_timer
 
-		local _size_total _size_uptodate _size_updated _size_removed _size_excluded _size_added _align_size _file_count_updated
+		local size_total size_uptodate size_updated size_removed size_excluded size_added align_size file_count_updated size_skipped
 
-		buildTimerV timer
+		getTimerV 'timer'
 
-		formatSizeV "$file_count_size_total" 1 _size_total
-		formatSizeV "$file_count_size_uptodate" 1 _size_uptodate
-		formatSizeV "$file_count_size_updated1" 1 _size_updated
-		formatSizeV "$file_count_size_removed" 1 _size_removed
-		formatSizeV "$file_count_size_excluded" 1 _size_excluded
-		formatSizeV "$file_count_size_added" 1 _size_added
-		formatSizeV "$file_count_size_skipped" 1 _size_skipped
+		formatSizeV 'size_total' "$fileCountSizeTotal" 15
+		formatSizeV 'size_uptodate' "$fileCountSizeUptodate" 15
+		formatSizeV 'size_updated' "$fileCountSizeUpdated1" 15
+		formatSizeV 'size_removed' "$fileCountSizeRemoved" 15
+		formatSizeV 'size_excluded' "$fileCountSizeExcluded" 15
+		formatSizeV 'size_added' "$fileCountSizeAdded" 15
+		formatSizeV 'size_skipped' "$fileCountSizeSkipped" 15
 
-		max_file_name_size="$TIME_SIZE ${A_ActionSpace} $EMPTY_SIZE ?????? "
-		(( _file_count_updated = file_count_updated1 + file_count_updated2, _align_size = ${#action_context_size} - ${#rotation_status_size} - 1, max_file_name_size = $(tput cols) - ${#max_file_name_size} ))
+		max_file_name_size="$TIME_SIZE ${A_TAG_LENGTH_SIZE} $EMPTY_SIZE ?????? "
+		(( file_count_updated = fileCountUpdated1 + fileCountUpdated2, align_size = ${#action_context_size} - ${#rotationStatusSize} - 1, max_file_name_size = $(tput cols) - ${#max_file_name_size} ))
 
-		printf -v step_1_progress1 "${TF_WHITE}%15d ${TF__GREEN}%15d ${TF__LBLUE}%15d ${TF__YELLOW}%15d ${TF__RED}%15d ${TF__LRED}%15d ${TF__CYAN}%15d" ${file_count_total} ${file_count_uptodate} ${file_count_added} ${_file_count_updated} ${file_count_removed} ${file_count_excluded} ${file_count_skipped}
+		printf -v step_1_progress1 "${S_NOWHI}%15d ${S_GRE}%15d ${S_LBL}%15d ${S_YEL}%15d ${S_RED}%15d ${S_LRE}%15d ${S_CYA}%15d" ${fileCountTotal} ${fileCountUptodate} ${fileCountAdded} ${file_count_updated} ${fileCountRemoved} ${fileCountExcluded} ${fileCountSkipped}
 
 		step_1_progress1="$timer $action_context $step_1_progress1"
-		step_1_progress2="$timer $rotation_status ${PADDING:0:$_align_size} $_size_total $_size_uptodate $_size_added $_size_updated $_size_removed $_size_excluded $_size_skipped"
-	fi
+		step_1_progress2="$timer $rotationStatus ${PADDING_SPACE:0:align_size} $size_total $size_uptodate $size_added $size_updated $size_removed $size_excluded $size_skipped"
+	}
 
-	shortenFileNameV "/$file_name" "$max_file_name_size" '_file_name_text'
+	shortenFileNameV 'filename_text' "/$filename" "$max_file_name_size"
 
 	if (( file_type == TYPE_FOLDER )); then
-		_file_size="${action_color}${TS_DARK}$FOLDER_SIZE${TR_ALL}"
-		_file_name_text="${action_color}${TS_DARK}$_file_name_text"
+		file_size="${action_color}${S_DA}$FOLDER_SIZE${S_R_AL}"
+		filename_text="${action_color}${S_DA}$filename_text"
 	elif (( file_type == TYPE_SYMLINK )); then
-		_file_size="${action_color}${TS_ITALIC}$SYMLINK_SIZE${TR_ALL}"
-		_file_name_text="${action_color}${TS_ITALIC}$_file_name_text"
+		file_size="${action_color}${S_IT}$SYMLINK_SIZE${S_R_AL}"
+		filename_text="${action_color}${S_IT}$filename_text"
 	else
-		formatSizeV $file_size 1 '_file_size'
-		_file_name_text="${action_color}$_file_name_text"
+		formatSizeV 'file_size' $file_size 15
+		filename_text="${action_color}$filename_text"
 	fi
 
-	echo -e "$timer $action_tag $_file_size $action__flags $_file_name_text${TR_ALL}${TM_ClearEndLine}"
-	echo -e "$step_1_progress1${TR_ALL}"
-	echo -ne "$step_1_progress2${TR_ALL}\r${TM_Up1}"
+	echo -e "$timer $action_tag $file_size $action__flags $filename_text${S_R_AL}${ES_CURSOR_TO_LINE_END}"
+	echo -e "$step_1_progress1${S_R_AL}${ES_CURSOR_TO_LINE_END}"
+	echo -ne "$step_1_progress2${S_R_AL}\r${CO_UP_1}"
 }
 
-function showProgress_Step_2()
+function showProgress_Step_2
 {
-	local _timer _file_name_text _size_1 _size_2
+	local timer filename_text size_1 size_2
 
-	buildTimerV _timer
+	getTimerV timer
 
-	shortenFileNameV "/$file_name" "$max_file_name_size" '_file_name_text'
-	formatSize $file_size 1 '_size_1'
-	formatSize $progress_total_size_2 1 '_size_2'
+	shortenFileNameV 'filename_text' "/$filename" "$max_file_name_size"
+	formatSizeV 'size_1' $file_size 15
+	formatSizeV 'size_2' $progress_total_size_2 15
 
-	printf -v step_2_progress3 "+ ${TF_LRED}%15d" ${progress_total_item_2}
+	printf -v step_2_progress3 "+ ${S_NOLRE}%15d" ${progress_total_item_2}
 
-	echo -e "$timer $action_tag $_size_1 $_file_name_text${TR_ALL}${TM_ClearEndLine}"
-	echo -e "$timer $action_context $step_2_progress1 $step_2_progress3${TR_ALL}"
-	echo -ne "$timer $rotation_status ${PADDING:0:$align_size} $step_2_progress2 $progress_total_size_2${TR_ALL}\r${TM_Up1}"
+	echo -e "$timer $action_tag $size_1 $filename_text${S_R_AL}${ES_CURSOR_TO_LINE_END}"
+	echo -e "$timer $action_context $step_2_progress1 $step_2_progress3${S_R_AL}"
+	echo -ne "$timer $rotationStatus ${PADDING_SPACE:0:align_size} $step_2_progress2 $progress_total_size_2${S_R_AL}\r${CO_UP_1}"
 }
 
 
 
-# host_backuped='INIT'
-#
-# for host_folder in "$host_backuped" "${HOSTS_LIST[@]}" "$CAT_FILESLIST" "PIPES"; do
-# 	mkdir -p "$PATH_BackupFolder/$STATUS_FOLDER/$host_folder"
-# 	mkdir -p "$PATH_RamDisk/$STATUS_FOLDER/$host_folder"
-# 	rm -rf $PATH_RamDisk/$STATUS_FOLDER/$host_folder/[!_]*
-# done
-#
-# host_backuped='Router'
-#
+################################################################################################################################################################
+################################################################################################################################################################
+####                              ##############################################################################################################################
+####     The main script code     ##############################################################################################################################
+####                              ##############################################################################################################################
+################################################################################################################################################################
+################################################################################################################################################################
+
+takeWorkingDirectory
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+declare hostBackuped='INITIALIZATION'
+
+################################################################################
+##      Initialize bases fonlders                                             ##
+################################################################################
+
+mkdir -p "$PATH_BACKUP_FOLDER"
+mkdir -p "$PATH_BACKUP_FOLDER/$STATUS_FOLDER"
+
+for hostFolder in "$hostBackuped" "${HOSTS_LIST[@]}" "PIPES"; do # TODO Check pipes ??
+	mkdir -p "$PATH_TMP/$hostFolder"
+	mkdir -p "$PATH_TMP/$hostFolder/$VARIABLES_FOLDER"
+	mkdir -p "$PATH_TMP/MEMORY/$hostFolder"
+# 	rm -rf $PATH_RamDisk/$STATUS_FOLDER/$hostFolder/[!_]*
+done
+
+for hostFolder in "${HOSTS_LIST[@]}"; do
+	for dateFolder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5} Current; do
+		mkdir -p "$PATH_BACKUP_FOLDER/_Trashed_/Excluded/$hostFolder/$dateFolder"
+		mkdir -p "$PATH_BACKUP_FOLDER/_Trashed_/Rotation/$hostFolder/$dateFolder"
+		mkdir -p "$PATH_BACKUP_FOLDER/$hostFolder/$dateFolder"
+	done
+done
+
 # pipe_id=( )
 # MAIN_PIPE="$(getBackupFileName "Main-Stream" "PIPE" 1 "PIPES")"
 #
 # rm -f "$MAIN_PIPE"
 # mkfifo "$MAIN_PIPE"
-#
-# openFilesListsSpliter "data-10" 10
-# openFilesListsSpliter "data-20" 20
-# openFilesListsSpliter "data-30" 30
-# openFilesListsSpliter "data-40" 40
-# openFilesListsSpliter "data-50" 50
-# openFilesListsSpliter "data-60" 60
-#
-# time {
-# 	for num in {1..300000}; do
-# 		printf -v time '%(%s)T' -1
-# 		(( cat = (RANDOM % 13) + 2, range = 10 ** cat, number = ((RANDOM * RANDOM * RANDOM) + time) % range, 1 ))
-# 		printf '%15d %s %d\n' $number "The file name of 10 is :" $number >&${pipe_id[10]}
-# 		printf '%15d %s %d\n' $number "The file name of 20 is :" $number >&${pipe_id[20]}
-# 		printf '%15d %s %d\n' $number "The file name of 30 is :" $number >&${pipe_id[30]}
-# 		printf '%15d %s %d\n' $number "The file name of 40 is :" $number >&${pipe_id[40]}
-# 		printf '%15d %s %d\n' $number "The file name of 50 is :" $number >&${pipe_id[50]}
-# 		printf '%15d %s %d\n' $number "The file name of 60 is :" $number >&${pipe_id[60]}
-# 	done
-# 	echo ':END:'
-# 	echo ':END:' >&${pipe_id[10]}
-# }
-# sleep 3
-#
-# closeFilesListsSpliter "data-10" 10
-# closeFilesListsSpliter "data-20" 20
-# closeFilesListsSpliter "data-30" 30
-# closeFilesListsSpliter "data-40" 40
-# closeFilesListsSpliter "data-50" 50
-# closeFilesListsSpliter "data-60" 60
-#
-# exit
 
+if checkSectionStatus 'Backup-Started'; then
+	rm --preserve-root -f "$PATH_TMP/brutal.mode"
 
-################################################################################
-################################################################################
-####                                                                        ####
-####     The main script code                                               ####
-####                                                                        ####
-################################################################################
-################################################################################
+	(( BRUTAL > 0 )) && {
+		echo
+		echo -e "${A_WARNING_NR} The backup is in ${S_NORED}BRUTAL MODE${S_NO}, this will take a VERY LONG time !!"
+		echo -ne "${A_TAG_LENGTH_SIZE} Do you want to continue anyway ? "; getWordUserChoiceV 'selected' 'Yes No'
+		case $selected in
+			1)
+				echo -e "\r${A_OK}"
+				echo 'Activated' > "$PATH_TMP/brutal.mode"
+				;;
+			2)
+				echo -e "\r${A_ABORTED_NY}"
+				exit 1
+				;;
+		esac
+		sleep 2
+	}
 
-BRUTAL=0		# 1 = Force a whole files backup to syncronize all !! (can be very very looooong...)
-
-host_backuped='INIT'
-
-trap 'error_report $LINENO "$BASH_COMMAND" "$?"' ERR QUIT INT TERM
-
-for host_folder in "$host_backuped" "${HOSTS_LIST[@]}" "PIPES"; do
-	mkdir -p "$PATH_BackupFolder/$STATUS_FOLDER/$host_folder"
-	mkdir -p "$PATH_RamDisk/$STATUS_FOLDER/$host_folder"
-	rm -rf $PATH_RamDisk/$STATUS_FOLDER/$host_folder/[!_]*
-done
-
-pipe_id=( )
-MAIN_PIPE="$(getBackupFileName "Main-Stream" "PIPE" 1 "PIPES")"
-
-rm -f "$MAIN_PIPE"
-mkfifo "$MAIN_PIPE"
-
-if [ "$BRUTAL" -ne 0 ]; then
+	makeSectionStatusDone 'Backup-Started'
+else
 	echo
-	echo -e "${A_Warning} Backup is in ${TF_RED}BRUTAL MODE${TR_ALL}, this will take a VERY LONG time !!"
-	echo -ne "${A_NoAction} Do you want to continue anyway ? "; getSelectableWord "Yes No"
-	case $selected_word in
+	choice='New Continue'
+	choice2=''
+	echo -e "${A_WARNING_NY} A backup is already ${S_NORED}IN PROGRESS${S_NO}, but has probably crashed..."
+	[[ ($BRUTAL == 1 && ! -f "$PATH_TMP/brutal.mode") || -f "$PATH_TMP/brutal.mode" && $BRUTAL == 0 ]] && {
+		echo -e "${S_NORED}! you can't choose continue because the BRUTAL MODE was not the same in this backup...${S_NO}"
+		choice='New'
+		choice2="${S_BA}${S_DA}${S_YEL}Continue${S_NO} "
+	}
+	echo -ne "${A_TAG_LENGTH_SIZE} Do you want to try to continue, or start a new one ? $choice2"; getWordUserChoiceV 'selected' $choice
+	case $selected in
 		1)
-			echo -e "\r${A_OK}"
-			;;
-		2)
-			echo -e "\r${A_Aborted}"
-			exit 1
-			;;
-	esac
-fi
-
-if [ "$(checkStatus 'Rotation')" == 'Done' ]; then
-	echo
-	echo -e "${A_Warning} A backup is already ${TF_RED}IN PROGRESS${TR_ALL} but has probably crash..."
-	echo -ne "${A_NoAction} Do you want to try to continue, or start a new one ? "; getSelectableWord "Continue New"
-	case $selected_word in
-		1)
-			echo -e "\r${A_OK}"
-			;;
-		2)
-			echo -e "\r${A_Aborted}"
-			for host_folder in "$host_backuped" "${HOSTS_LIST[@]}"; do
-				rm -rf $PATH_BackupFolder/$STATUS_FOLDER/$host_folder/[!_]*
+			echo -e "\r${A_ABORTED_NY}"
+			for hostFolder in "$hostBackuped" "${HOSTS_LIST[@]}"; do
+				rm -rf "$PATH_BACKUP_FOLDER/$STATUS_FOLDER/$hostFolder/"*
 			done
 			;;
+		2)
+			echo -e "\r${A_OK}"
+			;;
 	esac
+	sleep 2
 fi
-echo
 
-sync
-for host_folder in "$host_backuped" "${HOSTS_LIST[@]}"; do
-	if [ "$(find "$PATH_BackupFolder/$STATUS_FOLDER/$host_folder/" -type f -name "[!_]*" -print)" != '' ]; then
-		cp -rf --remove-destination $PATH_BackupFolder/$STATUS_FOLDER/$host_folder/[!_]* $PATH_RamDisk/$STATUS_FOLDER/$host_folder/
-	fi
-done
+# for hostFolder in "$hostBackuped" "${HOSTS_LIST[@]}"; do
+# 	if [ "$(find "$PATH_BACKUP_FOLDER/$STATUS_FOLDER/$hostFolder/" -type f -name "[!_]*" -print)" != '' ]; then
+# 		cp -rf --remove-destination $PATH_BACKUP_FOLDER/$STATUS_FOLDER/$hostFolder/[!_]* $PATH_RamDisk/$STATUS_FOLDER/$hostFolder/
+# 	fi
+# done
+
+clear
+
+
 
 
 
@@ -1577,8 +939,11 @@ done
 ##      Make rotation of archived files                                       ##
 ################################################################################
 
-if [ "$(checkStatus 'Rotation_Finished')" == 'Uncompleted' ]; then
-	showTitle "Rotation of the archived files..."
+declare pathWorkingDirectory="$(getHostWorkingDirectory)"
+declare pathWorkingDirectoryRAM="$(getHostWorkingDirectory 1)"
+
+if checkSectionStatus 'Rotation-Finished' "$hostBackuped"; then
+	updateScreenCurrentAction 'Rotation of the archived files'
 
 
 
@@ -1586,85 +951,89 @@ if [ "$(checkStatus 'Rotation_Finished')" == 'Uncompleted' ]; then
 #==     Find who need to be rotated                                          ==#
 #==============================================================================#
 
-	if [ "$(checkStatus 'Rotation')" == 'Uncompleted' ]; then
+	if checkSectionStatus 'Rotation-Details' "$hostBackuped"; then
+		updateScreenCurrentAction 'Rotation of the archived files :' 'Check date'
 
-		initVariablesState_Rotation
+		declare -i isNewDay=0 isNewWeek=0 isNewMonth=0 isNewYear=0 isYesterday dayOfWeek
 
-		buildTimerV timer
-		if [ -f "$PATH_BackupFolder/$STATUS_FOLDER/_LastBackupDate" ]; then
-			BackupLastDate=( $(cat "$PATH_BackupFolder/$STATUS_FOLDER/_LastBackupDate") )
+		declare     backupLastDateText=''
+		declare -ai backupLastDate backupCurrentDate
 
-			(( LastBackupSince = SCRIPT_START_TIME - BackupLastDate[4], Days = LastBackupSince / 86400, Hours = (LastBackupSince % 86400) / 3600, Minutes = ((LastBackupSince % 86400) % 3600) / 60, 1 ))
+		if [ -f "$PATHFILE_LAST_BACKUP_DATE" ]; then
+			read -a backupLastDate < "$PATHFILE_LAST_BACKUP_DATE"
 
-			echo -e "${timer} ${A_NoAction} : The last backup was at $(cat "$PATH_BackupFolder/$STATUS_FOLDER/_LastBackupDate.txt"), ${TS__BOLD_WHITE}$Days${TF_WHITE} day(s) ${TS__BOLD_WHITE}$Hours${TF_WHITE} hour(s) ${TS__BOLD_WHITE}$Minutes${TF_WHITE} minute(s)${TR_ALL} ago"
-			RotationLastDate="The last backup was at $(cat "$PATH_BackupFolder/$STATUS_FOLDER/_LastBackupDate.txt"), ${TS__BOLD_WHITE}$Days${TF_WHITE} day(s) ${TS__BOLD_WHITE}$Hours${TF_WHITE} hour(s) ${TS__BOLD_WHITE}$Minutes${TF_WHITE} minute(s)${TR_ALL} ago"
+# 			(( LastBackupSince = SCRIPT_START_TIME - backupLastDate[4], Days = LastBackupSince / 86400, Hours = (LastBackupSince % 86400) / 3600, Minutes = ((LastBackupSince % 86400) % 3600) / 60, 1 ))
+			declare -a backupLastSince=( $(TZ=UTC printf '%(%-j %H %M %S)T' $((SCRIPT_START_TIME - backupLastDate[0]))) )
+
+			backupLastDateText="The last backup was at $(cat "$PATHFILE_LAST_BACKUP_DATE.txt"), ${S_BOWHI}${backupLastSince[0]}${S_NOWHI}D ${S_BOWHI}${backupLastSince[1]}${S_NOWHI}H${S_BOWHI}${backupLastSince[2]}${S_NOWHI}:${S_BOWHI}${backupLastSince[3]}${S_NOWHI}${S_R_AL} ago"
+
+			unset 'backupLastSince'
 		else
-			BackupLastDate=( 0 0 0 0 0 )
-			RotationLastDate="This backup is the first one !"
+			backupLastDate=( 0 0 0 0 0 )
+			backupLastDateText="This backup is the first one !"
 		fi
 
-		BackupCurrentDateTXT="$(date '+%A %-d %B %Y @ %X')"
-		BackupCurrentDate=( $(date '+%-V %-d %-m %-Y %s %-H') )
-		DayOfWeek="$(date '+%w')"
-		if [ "${BackupCurrentDate[5]}" -lt 5 ]; then
-			BackupCurrentDate=( $(date -d yesterday '+%-V %-d %-m %-Y') $(date '+%s') )
-			DayOfWeek="$(date -d yesterday '+%w')"
-		fi
+		(( isYesterday = $(date '+%-H') <= 5 ? 1 : 0, isYesterday )) &&
+			declare yesterday='-d yesterday' ||
+			declare yesterday=''
 
-		if [ "${BackupCurrentDate[3]}" -gt "${BackupLastDate[3]}" ]; then
-			RotationNewYear=1
-			RotationNewMonth=1
-			RotationNewDay=1
-		else
-			if [ "${BackupCurrentDate[2]}" -gt "${BackupLastDate[2]}" ]; then
-				RotationNewMonth=1
-				RotationNewDay=1
-			elif [ "${BackupCurrentDate[1]}" -gt "${BackupLastDate[1]}" ]; then
-				RotationNewDay=1
-			fi
-		fi
+		backupCurrentDate=( $(date '+%s') $(date $yesterday '+%-j +%-V %-d %-m %-Y') )
+		dayOfWeek="$(date $yesterday '+%w')"
 
-		if [ "${BackupCurrentDate[0]}" -gt "${BackupLastDate[0]}" ]; then
-			RotationNewWeek=1
-		elif [ "${BackupCurrentDate[0]}" -eq 1 ] && [ "${BackupLastDate[0]}" -ne 1 ]; then
-			RotationNewWeek=1
-		fi
+		unset 'yesterday'
 
-# 		{
-# 			RotationNewDay=1
+		((	isNewYear  = backupCurrentDate[5] > backupLastDate[5] ? 1 : 0,
+			isNewMonth = backupCurrentDate[4] > backupLastDate[4] ? 1 : 0 | isNewYear,
+			isNewDay   = backupCurrentDate[3] > backupLastDate[3] ? 1 : 0 | isNewMonth,
+
+			isNewWeek  = ((backupCurrentDate[2] > backupLastDate[2]) ||
+						  ((backupCurrentDate[2] == 1) && (backupLastDate[2] != 1))) ? 1 : 0	)) || :
+
+# 		if [ "${backupCurrentDate[3]}" -gt "${backupLastDate[3]}" ]; then
+# 			isNewYear=1
+# 			isNewMonth=1
+# 			isNewDay=1
+# 		else
+# 			if [ "${backupCurrentDate[2]}" -gt "${backupLastDate[2]}" ]; then
+# 				isNewMonth=1
+# 				isNewDay=1
+# 			elif [ "${backupCurrentDate[1]}" -gt "${backupLastDate[1]}" ]; then
+# 				isNewDay=1
+# 			fi
+# 		fi
+#
+# 		if [ "${backupCurrentDate[0]}" -gt "${backupLastDate[0]}" ]; then
+# 			isNewWeek=1
+# 		elif [ "${backupCurrentDate[0]}" -eq 1 ] && [ "${backupLastDate[0]}" -ne 1 ]; then
+# 			isNewWeek=1
+# 		fi
+
+# 		{ # FOR DEBUG
+			isNewDay=1
 # 		}
+		declare rotationStatus=''
 
-		if [ "$RotationNewDay" -eq 1 ]; then
-			rotation_status="${TF_GREEN}NEW-DAY "
-			rotation_status_size="NEW-DAY "
-		fi
-		if [ "$RotationNewMonth" -eq 1 ]; then
-			rotation_status="${TF_GREEN}NEW-MONTH "
-			rotation_status_size="NEW-MONTH "
-		fi
-		if [ "$RotationNewYear" -eq 1 ]; then
-			rotation_status="${TF_GREEN}NEW-YEAR "
-			rotation_status_size="NEW-YEAR "
-		fi
-		if [ "$RotationNewWeek" -eq 1 ]; then
-			rotation_status="${rotation_status}${TF_RED}${TB__YELLOW} NEW-WEEK ${TR_ALL} "
-			rotation_status_size="${rotation_status_size} NEW-WEEK  "
-		fi
-		rotation_status="${rotation_status}${TR_ALL}-"
-		rotation_status_size="${rotation_status_size}-"
+		(( isNewDay   == 1 )) && rotationStatus="${S_NOGRE}NEW-DAY"
+		(( isNewMonth == 1 )) && rotationStatus="${S_NOGRE}NEW-MONTH"
+		(( isNewYear  == 1 )) && rotationStatus="${S_NOGRE}NEW-YEAR"
+		(( isNewWeek  == 1 )) && rotationStatus+=" ${S_NOYEL}${S_B_RED} NEW-WEEK "
+		rotationStatus+="${S_R_AL}"
 
-		echo -e "${timer} ${A_NoAction} : Rotation status : $rotation_status"
-		echo
+		declare -i rotationStatusSize=$(getCSI_StringLength "$rotationStatus")
 
-		saveVariablesState_Rotation
-		echo "${BackupCurrentDate[@]}" > "$PATH_BackupFolder/$STATUS_FOLDER/_LastBackupDate"
-		echo "${BackupCurrentDateTXT}" > "$PATH_BackupFolder/$STATUS_FOLDER/_LastBackupDate.txt"
+		echo "${backupCurrentDate[*]}"   			>| "$PATHFILE_LAST_BACKUP_DATE"
+		echo "$(date '+%A %-d %B %Y @ %H:%M:%S')"	>| "$PATHFILE_LAST_BACKUP_DATE.txt"
 
-		makeStatusDone 'Rotation'
-		sleep 2
+		unset 'backupLastDate' 'backupCurrentDate'
+
+		declare -p isNewDay isNewWeek isNewMonth isNewYear isYesterday dayOfWeek backupLastDateText rotationStatus rotationStatusSize > "$pathWorkingDirectory/$VARIABLES_FOLDER/Rotation-Details.var"
+
+		makeSectionStatusDone 'Rotation-Details' "$hostBackuped"
 	else
-		loadVariablesState_Rotation
+		. "$pathWorkingDirectory/$VARIABLES_FOLDER/Rotation-Details.var"
 	fi
+
+	echo -e "$(getCSI_CursorMove Position 2 1)$backupLastDateText"
 
 
 
@@ -1672,80 +1041,54 @@ if [ "$(checkStatus 'Rotation_Finished')" == 'Uncompleted' ]; then
 #==     Rotate all files that need it                                        ==#
 #==============================================================================#
 
-	# Ensure that bases folders exists
-	if [ "$(checkStatus 'MakeBaseFolder')" == 'Uncompleted' ]; then
-		for base_folder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5}; do
-			for host_folder in "${HOSTS_LIST[@]}"; do
-				makeBaseFolders "_Trashed_/Excluded/$base_folder/$host_folder"
-				countFiles "_Trashed_/Excluded/$base_folder/$host_folder" "Start"
-			done
-		done
-		for host_folder in "${HOSTS_LIST[@]}"; do
-			makeBaseFolders "_Trashed_/Excluded/Current/$host_folder"
-			countFiles "_Trashed_/Excluded/Current/$host_folder" "Start"
-		done
-		for base_folder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5}; do
-			for host_folder in "${HOSTS_LIST[@]}"; do
-				makeBaseFolders "_Trashed_/Rotation/$base_folder/$host_folder"
-				countFiles "_Trashed_/Rotation/$base_folder/$host_folder" "Start"
-			done
-		done
-		for base_folder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5}; do
-			for host_folder in "${HOSTS_LIST[@]}"; do
-				makeBaseFolders "$base_folder/$host_folder"
-				countFiles "$base_folder/$host_folder" "Start"
-			done
-		done
-		sleep 1
-		for host_folder in "${HOSTS_LIST[@]}"; do
-			makeBaseFolders "Current/$host_folder"
-			countFiles "Current/$host_folder" "Start"
-			sleep 1
-		done
+	declare -i count_size_trashed=0 count_files_trashed=0 count_size_rotation=0 count_files_rotation=0	# TODO : change name
+	declare -r PATHFILE_ROTATION_STATISTICS="$pathWorkingDirectory/$VARIABLES_FOLDER/Rotation-Statistics.var"
 
-		makeStatusDone 'MakeBaseFolder'
-		sleep 1
-	fi
-
-	if [ "$(checkStatus 'RotationStatisticsInit')" == 'Uncompleted' ]; then
-		initVariablesState_Rotation_Statistics
-
-		makeStatusDone 'RotationStatisticsInit'
+	if [[ -f "$PATHFILE_ROTATION_STATISTICS" ]]; then
+		. "$PATHFILE_ROTATION_STATISTICS"
 	else
-		loadVariablesState_Rotation_Statistics
+		echo -n '' > "$PATHFILE_ROTATION_STATISTICS"
 	fi
+
+# 	if [ "$(checkStatus 'RotationStatisticsInit')" == 'Uncompleted' ]; then
+# 		initVariablesState_Rotation_Statistics
+#
+# 		makeStatusDone 'RotationStatisticsInit'
+# 	else
+# 		loadVariablesState_Rotation_Statistics
+# 	fi
 
 	removeTrashedContent
 
-	if [ "$RotationNewYear" -eq 1 ]; then
-		rotateFolder 'Year-5' '_Trashed_/Rotation/Year-5'
+	(( isNewYear == 1 )) && {
+		rotateFolder 'Year-5' "$TRASH_FOLDER"
 
 		rotateFolder 'Year-4' 'Year-5'
 		rotateFolder 'Year-3' 'Year-4'
 		rotateFolder 'Year-2' 'Year-3'
-	fi
+	}
 
-	if [ "$RotationNewMonth" -eq 1 ]; then
+	(( isNewMonth == 1 )) && {
 		rotateFolder 'Month-12' 'Year-2'
 		rotateFolder 'Month-11' 'Month-12'
 		rotateFolder 'Month-10' 'Month-11'
-		rotateFolder 'Month-9' 'Month-10'
-		rotateFolder 'Month-8' 'Month-9'
-		rotateFolder 'Month-7' 'Month-8'
-		rotateFolder 'Month-6' 'Month-7'
-		rotateFolder 'Month-5' 'Month-6'
-		rotateFolder 'Month-4' 'Month-5'
-		rotateFolder 'Month-3' 'Month-4'
-		rotateFolder 'Month-2' 'Month-3'
-	fi
+		rotateFolder 'Month-9'  'Month-10'
+		rotateFolder 'Month-8'  'Month-9'
+		rotateFolder 'Month-7'  'Month-8'
+		rotateFolder 'Month-6'  'Month-7'
+		rotateFolder 'Month-5'  'Month-6'
+		rotateFolder 'Month-4'  'Month-5'
+		rotateFolder 'Month-3'  'Month-4'
+		rotateFolder 'Month-2'  'Month-3'
+	}
 
-	if [ "$RotationNewWeek" -eq 1 ]; then
+	(( isNewWeek == 1 )) && {
 		rotateFolder 'Week-4' 'Month-2'
 		rotateFolder 'Week-3' 'Week-4'
 		rotateFolder 'Week-2' 'Week-3'
-	fi
+	}
 
-	if [ "$RotationNewDay" -eq 1 ]; then
+	(( isNewDay == 1 )) && {
 		rotateFolder 'Day-7' 'Week-2'
 		rotateFolder 'Day-6' 'Day-7'
 		rotateFolder 'Day-5' 'Day-6'
@@ -1753,12 +1096,11 @@ if [ "$(checkStatus 'Rotation_Finished')" == 'Uncompleted' ]; then
 		rotateFolder 'Day-3' 'Day-4'
 		rotateFolder 'Day-2' 'Day-3'
 		rotateFolder 'Day-1' 'Day-2'
-	fi
+	}
 
-	makeStatusDone 'Rotation_Finished'
+	makeSectionStatusDone 'Rotation-Finished' "$hostBackuped"
 else
-	showTitle "Rotation of the archived files..." "${A_Skipped}"
-	loadVariablesState_Rotation
+	. "$pathWorkingDirectory/$VARIABLES_FOLDER/Rotation-Details.var"
 fi
 
 
@@ -1771,107 +1113,87 @@ fi
 ################################################################################
 ################################################################################
 
-
-
-################################################################################
-##      Preparing all include and exclude files list                          ##
-################################################################################
-
-if [ "$(checkStatus 'Include-Exclude')" == 'Uncompleted' ]; then
-
-#==============================================================================#
-#==     BravoTower Host                                                      ==#
-#==============================================================================#
-
-# INCLUDE ----------------------------------------------------------------------
-echo '
-/bin
-/etc
-/usr
-/var
-/root
-/home/foophoenix
-/data
-/media/foophoenix/AppKDE
-/media/foophoenix/DataCenter
-' # > "$(getBackupFileName 'Include' "$CAT_FILESLIST" 0 'BravoTower')"
-
-
-
-# EXCLUDE ----------------------------------------------------------------------
-#/media/foophoenix/DataCenter/.Trash
-#/media/foophoenix/AppKDE/.Trash
-echo '
-/home/foophoenix/Data/Router/DataSierra
-/home/foophoenix/Data/Router/Home-FooPhoenix
-/home/foophoenix/Data/Router/Root
-/home/foophoenix/Data/BackupSystem/BackupFolder
-/home/foophoenix/Data/BackupSystem/Root
-' # > "$(getBackupFileName 'Exclude' "$CAT_FILESLIST" 0 'BravoTower')"
-
-
-
-#==============================================================================#
-#==     Router Host                                                          ==#
-#==============================================================================#
-
-# INCLUDE ----------------------------------------------------------------------
-echo '
-/bin
-/etc
-/usr
-/var
-/root
-/home/foophoenix
-/data
-' > "$(getBackupFileName 'Include' "$CAT_FILESLIST" 0 'Router')"
-
-
-
-# EXCLUDE ----------------------------------------------------------------------
-#/media/foophoenix/DataCenter/.Trash
-#/media/foophoenix/AppKDE/.Trash
-echo '
-/home/foophoenix/VirtualBox/BackupSystem/Snapshots
-' > "$(getBackupFileName 'Exclude' "$CAT_FILESLIST" 0 'Router')"
-
-
-	makeStatusDone 'Include-Exclude'
-fi
-
-################################################################################
-##      Launch the backup now !!                                              ##
-################################################################################
-
 TYPE_FILE=1
 TYPE_FOLDER=2
 TYPE_SYMLINK=3
 
-for host_backuped in "${HOSTS_LIST[@]}"; do
-	echo
-	echo -e "${TS__BOLD_WHITE}              Start to make the backup of $host_backuped...${TR_ALL}"
+for hostBackuped in "${HOSTS_LIST[@]}"; do
+	declare pathWorkingDirectory="$(getHostWorkingDirectory)"
+	declare pathWorkingDirectoryRAM="$(getHostWorkingDirectory 1)"
 
-	case $host_backuped in
-		BravoTower)
-			COMPRESS='-zz --compress-level=6 --skip-compress=rar'
+	case "$hostBackuped" in
+		'BravoTower')
+			echo '	/bin
+					/etc
+					/usr
+					/var
+					/root
+					/home/foophoenix
+					/data
+					/media/foophoenix/AppKDE
+					/media/foophoenix/DataCenter
+				' > "$pathWorkingDirectory/Include.items"
+
+					#/media/foophoenix/DataCenter/.Trash
+					#/media/foophoenix/AppKDE/.Trash
+			echo '	/home/foophoenix/Data/Router/DataSierra
+					/home/foophoenix/Data/Router/Home-FooPhoenix
+					/home/foophoenix/Data/Router/Root
+					/home/foophoenix/Data/BackupSystem/BackupFolder
+					/home/foophoenix/Data/BackupSystem/Root
+				' > "$pathWorkingDirectory/Exclude.items"
+			;;
+		'Router')
+			echo '	/bin
+					/etc
+					/usr
+					/var
+					/root
+					/home/foophoenix
+					/data
+				' > "$pathWorkingDirectory/Include.items"
+
+					#/media/foophoenix/DataCenter/.Trash
+					#/media/foophoenix/AppKDE/.Trash
+			echo '	/home/foophoenix/VirtualBox/BackupSystem/Snapshots
+					/home/foophoenix/tmp
+				' > "$pathWorkingDirectory/Exclude.items"
 			;;
 		*)
-			COMPRESS=''	# --bwlimit=30M
+			errcho "Backup of '$hostBackuped' failed and skipped because no include/exclude configuration is made..."
+			continue
 			;;
 	esac
 
-	if [ -d "$PATH_HostBackupedFolder" ]; then
-		fusermount -u -z -q "$PATH_HostBackupedFolder" &2> /dev/null
-	fi
+	sed -i 's/^[[:blank:]]*//;/^[[:blank:]]*$/d' "$pathWorkingDirectory/Include.items"
+	sed -i 's/^[[:blank:]]*//;/^[[:blank:]]*$/d' "$pathWorkingDirectory/Exclude.items"
 
-	sleep 2
-	if [ -d "$PATH_HostBackupedFolder" ]; then
-		rmdir "$PATH_HostBackupedFolder"
-	fi
-	mkdir "$PATH_HostBackupedFolder"
-	sync
-	sshfs $host_backuped:/ "$PATH_HostBackupedFolder" -o follow_symlinks -o ro -o cache=no -o ssh_command='ssh -c chacha20-poly1305@openssh.com -o Compression=no'
-	sleep 2
+	case "$hostBackuped" in
+		'BravoTower')
+			compress_details='-zz --compress-level=6 --skip-compress=rar'
+			;;
+		*)
+			compress_details=''	# --bwlimit=30M
+			;;
+	esac
+
+	echo
+	echo -e "${S_BOWHI}              Start to make the backup of $hostBackuped...${S_R_AL}"
+
+	# Check if the host is connected
+	[[ "$(ssh $hostBackuped "echo 'ok'")" != 'ok' ]] && {
+		# TODO : Show a message ??
+		continue
+	}
+
+	mkdir -p "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped"
+	[[ "$(ls -A "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped")" == '' ]] &&
+		sshfs $hostBackuped:/ "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped" -o follow_symlinks -o ro -o cache=no -o ssh_command='ssh -c chacha20-poly1305@openssh.com -o Compression=no'
+
+# 		fusermount -u -z -q "$PATH_HOST_BACKUPED_FOLDER" &2> /dev/null
+# 		rmdir "$PATH_HOST_BACKUPED_FOLDER"
+		sync
+		sleep 1
 
 
 
@@ -1887,27 +1209,55 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 #==     Initialize some used variables                                       ==#
 #==============================================================================#
 
-	if [ "$(checkStatus 'Step_1')" == 'Uncompleted' ]; then
-		showTitle "$host_backuped : Make the lists of files..."
+	if checkSectionStatus 'Step_1' "$hostBackuped"; then
+		showTitle "$hostBackuped : Make the lists of files..."
 
-		action_context="${TF_WHITE}${host_backuped}${TR_ALL} - Build the files list -"
-		action_context_size="${host_backuped} - Build the files list -"
+		action_context="${S_NOWHI}${hostBackuped}${S_R_AL} - Build the files list -"
+		action_context_size="${hostBackuped} - Build the files list -"
 
-		initVariablesState_Step_1_Statistics
+		declare -i fileCountTotal=0		fileCountSizeTotal=0
+		declare -i fileCountAdded=0		fileCountSizeAdded=0		canalAdded
+		declare -i fileCountUpdated1=0	fileCountSizeUpdated1=0		canalUpdate1
+		declare -i fileCountUpdated2=0	fileCountSizeUpdated2=0		canalUpdate2
+		declare -i fileCountRemoved=0	fileCountSizeRemoved=0		canalRemoved
+		declare -i fileCountExcluded=0	fileCountSizeExcluded=0		canalExcluded
+		declare -i fileCountUptodate=0	fileCountSizeUptodate=0
+		declare -i fileCountSkipped=0	fileCountSizeSkipped=0		canalSkipped  # TODO : still usefull ???
 
-		openFilesListsSpliter "Added" 10
-		openFilesListsSpliter "Updated1" 20		# Data update
-		openFilesListsSpliter "Updated2" 30		# Permission update
-		openFilesListsSpliter "Removed" 40
-		openFilesListsSpliter "Excluded" 50
-		openFilesListsSpliter "Skipped" 60
+		openFilesListsSpliter 'canalAdded'    'Added'
+		openFilesListsSpliter 'canalUpdate1'  'Updated1' 		# Data update
+		openFilesListsSpliter 'canalUpdate2'  'Updated2' 		# Permission update
+		openFilesListsSpliter 'canalRemoved'  'Removed'
+		openFilesListsSpliter 'canalExcluded' 'Excluded'
+		openFilesListsSpliter 'canalSkipped'  'Skipped'	# TODO : Add uptodate for brutal mode !
 
-		if [ "$RotationNewWeek" -eq 1 ] || [ $BRUTAL -ne 0 ]; then
-			FILE_MAX_SIZE=''
-		else
-			FILE_MAX_SIZE='--max-size=150MB'
-			FILE_MAX_SIZE='--max-size=500KB'
-		fi
+		fileMaxSize='--max-size=150MB'
+		fileMaxSize='--max-size=500KB'
+		fileMaxSize='--max-size=50KB'
+
+		(( isNewWeek == 1 || BRUTAL == 1 )) &&
+			fileMaxSize=''
+
+		declare -i canalMain canalSkippedIn canalRemovedIn canalResolvedIn canalSkippedOut canalRemovedOut canalResolvedOut		# TODO : Verify all unset variables
+		declare    mainPipe="$pathWorkingDirectoryRAM/Main.pipe"
+		declare    skippedPipe="$pathWorkingDirectoryRAM/Skipped.fake.pipe"
+		declare    removedPipe="$pathWorkingDirectoryRAM/Removed.fake.pipe"
+		declare    resolvedPipe="$pathWorkingDirectoryRAM/Resolved.fake.pipe"
+
+		rm -f  "$mainPipe"
+		mkfifo "$mainPipe"	# TODO : think about scriptPostRemoveFiles for all file in this script...
+
+# 		echo -n '' >| "$skippedPipe"
+# 		echo -n '' >| "$removedPipe"
+# 		echo -n '' >| "$resolvedPipe"
+
+		exec {canalMain}<>"$mainPipe"
+		exec {canalSkippedOut}>"$skippedPipe"
+		exec {canalSkippedIn}<"$skippedPipe"
+		exec {canalRemovedOut}>"$removedPipe"
+		exec {canalRemovedIn}<"$removedPipe"
+		exec {canalResolvedOut}>"$resolvedPipe"
+		exec {canalResolvedIn}<"$resolvedPipe"
 
 
 
@@ -1915,124 +1265,89 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 #==     Build the files list                                                 ==#
 #==============================================================================#
 
-		__LastAction=0
-		__LastTime=0
-		__showProgress=0
-		__recieved_end=0
-
-		SKIPPED_PIPE="$(getBackupFileName "Skipped-Files" "PIPE" 1 "PIPES")"
-		REMOVED_PIPE="$(getBackupFileName "Removed-Files" "PIPE" 1 "PIPES")"
-		RESOLVED_PIPE="$(getBackupFileName "Resolved-Files" "PIPE" 1 "PIPES")"
-
-		echo -n '' > "$SKIPPED_PIPE"
-		echo -n '' > "$REMOVED_PIPE"
-		echo -n '' > "$RESOLVED_PIPE"
-
-		exec {pipe_id[1]}<>"$MAIN_PIPE"
-		exec {pipe_id[2]}>"$SKIPPED_PIPE"
-		exec {pipe_id[3]}<"$SKIPPED_PIPE"
-		exec {pipe_id[4]}>"$REMOVED_PIPE"
-		exec {pipe_id[5]}<"$REMOVED_PIPE"
-		exec {pipe_id[6]}>"$RESOLVED_PIPE"
-		exec {pipe_id[7]}<"$RESOLVED_PIPE"
-
 		{
-			rsync -vvirtpoglDmn --files-from="$(getBackupFileName 'Include' "$CAT_FILESLIST" 0)" --exclude-from="$(getBackupFileName 'Exclude' "$CAT_FILESLIST" 0)" \
-							$FILE_MAX_SIZE --delete-during --delete-excluded -M--munge-links --modify-window=5 \
-							--info=name2,backup,del,copy --out-format="> %12l %i %n" $host_backuped:"/" "$PATH_BackupFolder/Current/$host_backuped/"
-			echo ':END:'
-		} >&${pipe_id[1]} &
+			rsync -vvirtpoglDmn --files-from="$pathWorkingDirectory/Include.items" --exclude-from="$pathWorkingDirectory/Exclude.items" $fileMaxSize --delete-during --delete-excluded -M--munge-links --modify-window=5 --info=name2,backup,del,copy --out-format="> %12l %i %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/"
+			echo "$LOOP_END_TAG"
+		} >&${canalMain} &
 
-		{
-			while (( 1 == 1 )); do
-				while IFS= read -u ${pipe_id[7]} file_data; do
-					if [ ':END:' == "$file_data" ]; then
-						(( ++__recieved_end ))
-						if (( __recieved_end == 2 )); then
-							break
-						fi
-						continue
-					fi
+		{	# Resolved IN
+			pipeReceivedEnd=0
+			pipeExpectedEnd=2
 
-					echo "$file_data" >&${pipe_id[1]}
-				done
-				if [ ':END:' == "$file_data" ]; then
-					if (( __recieved_end == 2 )); then
-						break
-					fi
-				fi
-				sleep 1
+			while IFS= read -u ${canalResolvedIn} file_data || checkLoopFail; do
+				[[ -z "$file_data" ]] && continue
+				checkLoopEnd "$file_data" || { (( $? == 1 )) && break || continue; }
+
+				echo "$file_data" >&${canalMain}
 			done
-			echo ':END:' >&${pipe_id[1]}
+			echo "$LOOP_END_TAG" >&${canalMain}
 		} &
 
-		{
-			while (( 1 == 1 )); do
-				while IFS= read -u ${pipe_id[3]} file_name; do
-					if [ ':END:' == "$file_name" ]; then
-						break
-					fi
+		{	# Skipped IN
+			pipeReceivedEnd=0
+			pipeExpectedEnd=1
 
-					file_size="$(stat -c "%12s" "$PATH_HostBackupedFolder/${file_name}")"
+			while IFS= read -u ${canalSkippedIn} filename || checkLoopFail; do
+				[[ -z "$filename" ]] && continue
+				checkLoopEnd "$filename" || { (( $? == 1 )) && break || continue; }
 
-					echo "> $file_size sf--------- ${file_name}" >&${pipe_id[6]}
-				done
-				if [ ':END:' == "$file_name" ]; then
-					break
-				fi
-				sleep 1
+				file_size="$(stat -c "%12s" "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped/${filename}")"
+
+				echo "> $file_size sf--------- ${filename}" >&${canalResolvedOut}
 			done
-			echo ':END:' >&${pipe_id[6]}
+			echo "$LOOP_END_TAG" >&${canalResolvedOut}
 		} &
 
-		{
-			excluded_files_list="$(getBackupFileName 'Exclude' "$CAT_FILESLIST" 0)"
-			while (( 1 == 1 )); do
-				while IFS= read -u ${pipe_id[5]} file_name; do
-					if [ ':END:' == "$file_name" ]; then
-						break
-					fi
+		{	# Removed IN
+			excludedFilesList="$pathWorkingDirectory/Exclude.items"
 
-					getIsExcludedV "/$file_name" "$excluded_files_list" 'status'
-					file_type="$(stat -c "%F" "$PATH_BackupFolder/Current/$host_backuped/${file_name}")"
-					file_size="$(stat -c "%12s" "$PATH_BackupFolder/Current/$host_backuped/${file_name}")"
+			pipeReceivedEnd=0
+			pipeExpectedEnd=1
 
-					case "$file_type" in
-						'regular file')
-							file_type='f' ;;
-						'directory')
-							file_type='d' ;;
-						'symbolic link')
-							file_type='L' ;;
-					esac
-					echo "> $file_size ${status}${file_type}--------- ${file_name}" >&${pipe_id[6]}
-				done
-				if [ ':END:' == "$file_name" ]; then
-					break
-				fi
-				sleep 1
+			while IFS= read -u ${canalRemovedIn} filename || checkLoopFail; do
+				[[ -z "$filename" ]] && continue
+				checkLoopEnd "$filename" || { (( $? == 1 )) && break || continue; }
+
+				getIsExcludedV 'status' "/$filename" "$excludedFilesList"
+				file_type="$(stat -c "%F" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/${filename}")"
+				file_size="$(stat -c "%12s" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/${filename}")"
+
+				case "$file_type" in
+					'regular file'|'regular empty file')
+						file_type='f' ;;
+					'directory')
+						file_type='d' ;;
+					'symbolic link')
+						file_type='L' ;;
+					*)
+						errcho ':EXIT:' "Type inconnu !! ($file_type)"
+						;;
+				esac
+				echo "> $file_size ${status}${file_type}--------- ${filename}" >&${canalResolvedOut}
 			done
-			echo ':END:' >&${pipe_id[6]}
+			echo ':END:' >&${canalResolvedOut}
 		} &
 
-		while IFS= read -u ${pipe_id[1]} file_data; do
+		lastAction=0
+		lastTime=0
+		countProgress=0
+
+		pipeReceivedEnd=0
+		pipeExpectedEnd=2
+
+		while IFS= read -u ${canalMain} file_data || checkLoopFail; do
+			[[ -z "$file_data" ]] && continue
+			checkLoopEnd "$file_data" || {
+				(( $? == 1 )) && break
+
+				echo "$LOOP_END_TAG" >&${canalSkippedOut}
+				echo "$LOOP_END_TAG" >&${canalRemovedOut}
+
+				continue
+			}
+
 			if [ "${file_data:0:1}" != '>' ]; then
 				if [ "${#file_data}" -le 17 ]; then
-					if [ ':END:' == "$file_data" ]; then
-						(( ++__recieved_end ))
-						if (( __recieved_end == 1 )); then
-							echo ':END:' >&${pipe_id[2]}
-							echo ':END:' >&${pipe_id[4]}
-						elif (( __recieved_end == 2 )); then
-							echo ':END:' >&${pipe_id[10]}
-							echo ':END:' >&${pipe_id[20]}
-							echo ':END:' >&${pipe_id[30]}
-							echo ':END:' >&${pipe_id[40]}
-							echo ':END:' >&${pipe_id[50]}
-							echo ':END:' >&${pipe_id[60]}
-							break
-						fi
-					fi
 					continue
 				fi
 
@@ -2041,15 +1356,15 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 				fi
 
 				# Here we have a skipped file
-				echo "${file_data:0:$(( ${#file_data} - 17 ))}" >&${pipe_id[2]}
+				echo "${file_data:0:$(( ${#file_data} - 17 ))}" >&${canalSkippedOut}
 				continue
 			fi
 
-			file_name="${file_data:27}"
-			file_action="${file_data:15:1}"
+			filename="${file_data:27}"
+			fileAction="${file_data:15:1}"
 
-			if [ "$file_action" == '*' ]; then
-				echo "$file_name" >&${pipe_id[4]}
+			if [ "$fileAction" == '*' ]; then
+				echo "$filename" >&${canalRemovedOut}
 				continue
 			fi
 
@@ -2057,109 +1372,116 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 			file_type="${file_data:16:1}"
 
 			case "$file_type" in
-				'f')
+				'f'|'S')
 					file_type=$TYPE_FILE	;;
 				'd')
 					file_type=$TYPE_FOLDER	;;
 				'L')
 					file_type=$TYPE_SYMLINK	;;
+				*)
+					echo "$file_data"
+					errcho ':EXIT:' "Type inconnu !! ($file_type)"
 			esac
 
-			case $file_action in
+			case $fileAction in
 			'.')
-				action_flags="${file_data:17:9}"
-				if [ "$action_flags" == '         ' ]; then
+				actionFlags="${file_data:17:9}"
+				if [ "$actionFlags" == '         ' ]; then
 					updateLastAction 1
 
 					if (( file_type != TYPE_FOLDER )); then
-						(( file_count_size_uptodate += file_size, ++file_count_uptodate, file_count_size_total += file_size, ++file_count_total ))
+						(( fileCountSizeUptodate += file_size, ++fileCountUptodate, fileCountSizeTotal += file_size, ++fileCountTotal ))
 					fi
 				else
 					updateLastAction 2
 
-					getUpdateFlagsV "$action_flags" 'action__flags'
+					getUpdateFlagsV 'action__flags' "$actionFlags"
 
 					if (( file_type != TYPE_FOLDER )); then
-						(( file_count_size_updated2 += file_size, ++file_count_updated2, file_count_size_total += file_size, ++file_count_total ))
+						(( fileCountSizeUpdated2 += file_size, ++fileCountUpdated2, fileCountSizeTotal += file_size, ++fileCountTotal ))
 					fi
-					echo "$file_size $file_name" >&${pipe_id[30]}
+					echo "$file_size $filename" >&${canalUpdate2}
 				fi		;;
 			's')
 				updateLastAction 4
 
-				(( file_count_size_skipped += file_size, ++file_count_skipped, file_count_size_total += file_size, ++file_count_total ))
-				echo "$file_size $file_name" >&${pipe_id[60]}			;;
+				(( fileCountSizeSkipped += file_size, ++fileCountSkipped, fileCountSizeTotal += file_size, ++fileCountTotal ))
+				echo "$file_size $filename" >&${canalSkipped}			;;
 			'r')
 				updateLastAction 51
 
 				if (( file_type != TYPE_FOLDER )); then
-					(( file_count_size_removed += file_size, ++file_count_removed, file_count_size_total += file_size, ++file_count_total ))
-					echo "$file_size $file_name" >&${pipe_id[40]}
+					(( fileCountSizeRemoved += file_size, ++fileCountRemoved, fileCountSizeTotal += file_size, ++fileCountTotal ))
+					echo "$file_size $filename" >&${canalRemoved}
 				fi			;;
 			'e')
 				updateLastAction 52
 
 				if (( file_type != TYPE_FOLDER )); then
-					(( file_count_size_excluded += file_size, ++file_count_excluded, file_count_size_total += file_size, ++file_count_total ))
-					echo "$file_size $file_name" >&${pipe_id[50]}
+					(( fileCountSizeExcluded += file_size, ++fileCountExcluded, fileCountSizeTotal += file_size, ++fileCountTotal ))
+					echo "$file_size $filename" >&${canalExcluded}
 				fi			;;
 			*)
-				action_flags="${file_data:17:9}"
+				actionFlags="${file_data:17:9}"
 
-				if [ "$action_flags" == '+++++++++' ]; then
+				if [[ "$actionFlags" == '+++++++++' ]]; then
 					updateLastAction 6
 
 					if (( file_type != TYPE_FOLDER )); then
-						(( file_count_size_added += file_size, ++file_count_added, file_count_size_total += file_size, ++file_count_total ))
-						echo "$file_size $file_name" >&${pipe_id[10]}
+						(( fileCountSizeAdded += file_size, ++fileCountAdded, fileCountSizeTotal += file_size, ++fileCountTotal ))
+						echo "$file_size $filename" >&${canalAdded}
 					fi
 				else
 					updateLastAction 3
 
-					getUpdateFlagsV "$action_flags" 'action__flags'
+					getUpdateFlagsV 'action__flags' "$actionFlags"
 
-					(( file_count_size_updated1 += file_size, ++file_count_updated1, file_count_size_total += file_size, ++file_count_total ))
-					echo "$file_size $file_name" >&${pipe_id[20]}
+					(( fileCountSizeUpdated1 += file_size, ++fileCountUpdated1, fileCountSizeTotal += file_size, ++fileCountTotal ))
+					echo "$file_size $filename" >&${canalUpdate1}
 				fi			;;
 			esac
 
-			if (( ++__showProgress % 25 == 0 )); then
+			if (( ++countProgress % 25 == 0 )); then
 				showProgress_Step_1
 			fi
 		done
 
-		exec {pipe_id[1]}>&-
-		exec {pipe_id[2]}>&-
-		exec {pipe_id[3]}>&-
-		exec {pipe_id[4]}>&-
-		exec {pipe_id[5]}>&-
-		exec {pipe_id[6]}>&-
-		exec {pipe_id[7]}>&-
+		exec {canalMain}>&-
+		exec {canalSkippedOut}>&-
+		exec {canalSkippedIn}>&-
+		exec {canalRemovedOut}>&-
+		exec {canalRemovedIn}>&-
+		exec {canalResolvedOut}>&-
+		exec {canalResolvedIn}>&-
 
-		__LastTime=0
+		rm -f "$mainPipe"
+		rm -f "$skippedPipe"
+		rm -f "$removedPipe"
+		rm -f "$resolvedPipe"
+
+		lastTime=0
 		showProgress_Step_1
 		echo
 		echo
 		echo
 
-		saveVariablesState_Step_1_Statistics
+		closeFilesListsSpliter "Added" $canalAdded
+		closeFilesListsSpliter "Updated1" $canalUpdate1		# Data update
+		closeFilesListsSpliter "Updated2" $canalUpdate2		# Permission update
+		closeFilesListsSpliter "Removed" $canalRemoved
+		closeFilesListsSpliter "Excluded" $canalExcluded
+		closeFilesListsSpliter "Skipped" $canalSkipped
 
-		closeFilesListsSpliter "Added" 10
-		closeFilesListsSpliter "Updated1" 20		# Data update
-		closeFilesListsSpliter "Updated2" 30		# Permission update
-		closeFilesListsSpliter "Removed" 40
-		closeFilesListsSpliter "Excluded" 50
-		closeFilesListsSpliter "Skipped" 60
+# 		for canal in {1..9}; do
+# 			output_file_name="$(getBackupFileName "Skipped-${index}" "$CAT_FILESLIST" 1)"
+# 			rm -f "$output_file_name"
+# 		done
 
-		for canal in {1..9}; do
-			output_file_name="$(getBackupFileName "Skipped-${_canal}" "$CAT_FILESLIST" 1)"
-			rm -f "$output_file_name"
-		done
+		declare -p fileCountTotal fileCountSizeTotal fileCountAdded	fileCountSizeAdded fileCountUpdated1 fileCountSizeUpdated1 fileCountUpdated2 fileCountSizeUpdated2 fileCountRemoved fileCountSizeRemoved fileCountExcluded fileCountSizeExcluded fileCountUptodate fileCountSizeUptodate fileCountSkipped fileCountSizeSkipped >| "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_1.var"
 
-		makeStatusDone 'Step_1'
+		makeSectionStatusDone 'Step_1' "$hostBackuped"
 	else
-		showTitle "$host_backuped : Make the lists of files..." "${A_Skipped}"
-		loadVariablesState_Step_1_Statistics
+		. "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_1.var"
 	fi
 
 
@@ -2167,171 +1489,154 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 ################################################################################
 ################################################################################
 ####                                                                        ####
-####     STEP 2 : Puts all excluded files into Trash                         ####
+####     STEP 2 : Puts all excluded files into Trash                        ####
 ####                                                                        ####
 ################################################################################
 ################################################################################
 
-	if [ "$(checkStatus 'Step_2')" == 'Uncompleted' ]; then
-		showTitle "$host_backuped : Remove all excluded files..."
+	if checkSectionStatus 'Step_2' "$hostBackuped"; then
+		showTitle "$hostBackuped : Remove all excluded files..."
 
 		step_2_progress1=''
 		step_2_progress2=''
 
-		if [ "$(checkStatus 'Step_2_Current')" == 'Uncompleted' ]; then
-			if (( file_count_excluded > 0 )); then
+		if checkSectionStatus 'Step_2-Current' "$hostBackuped"; then # TODO : do it at the same time that others
+			if (( fileCountExcluded > 0 )); then
 
-				initVariablesState_Step_2
+				progress_total_item_1=$fileCountExcluded
+				progress_total_size_1=$fileCountSizeExcluded
+				progress_current_item_1_processed=0
+				progress_current_size_1_processed=0
+				progress_current_item_1_remaining=$progress_total_item_1
+				progress_current_size_1_remaining=$progress_total_size_1
 
-				source_folder="$PATH_BackupFolder/Current/$host_backuped"
-				excluded_folder="$PATH_BackupFolder/_Trashed_/Excluded/Current/$host_backuped"
+				source_folder="$PATH_BACKUP_FOLDER/$hostBackuped/Current"
+				excluded_folder="$PATH_BACKUP_FOLDER/_Trashed_/Excluded/$hostBackuped/Current"
 
-				action_tag="$A_Excluded"
-				action_color="${TF_LRED}"
+				action_tag="$A_EXCLUDED_R"
+				action_color="${S_NOLRE}"
 
-				action_context="${TF_WHITE}${host_backuped}${TR_ALL} - Trash excluded files -"
-				action_context_size="${host_backuped} - Trash excluded files -"
+				action_context="${S_NOWHI}${hostBackuped}${S_R_AL} - Trash excluded files -"
+				action_context_size="${hostBackuped} - Trash excluded files -"
 
-				max_file_name_size="$TIME_SIZE ${A_ActionSpace} $EMPTY_SIZE "
-				(( align_size = ${#action_context_size} - ${#rotation_status_size}, max_file_name_size = $(tput cols) - ${#max_file_name_size} ))
+				max_file_name_size="$TIME_SIZE ${A_TAG_LENGTH_SIZE} $EMPTY_SIZE "
+				(( align_size = ${#action_context_size} - ${#rotationStatusSize}, max_file_name_size = $(tput cols) - ${#max_file_name_size} ))
 
-				exec {pipe_id[1]}<>"$MAIN_PIPE"
+				cp -t "$pathWorkingDirectoryRAM" "$pathWorkingDirectory/Excluded-"{1..9}".files"
 
-				{
-					for canal in {1..9}; do
-						output_file_name="$(getBackupFileName "Excluded-${_canal}" "$CAT_FILESLIST" 1)"
-						cat "${FilesListRAM}_${host_backuped}_Excluded" >&${pipe_id[1]}
-					done
-					echo ':END:' >&${pipe_id[1]}
-				} &
-
-				while IFS= read -u ${pipe_id[1]} file_data; do
-					if [ ':END:' == "$file_data" ]; then
-						break
-					fi
+				while IFS= read -u ${canal} file_data; do
 
 					file_size="${file_data:0:12}"
-					file_name="${file_data:13}"
-					checkItemType "$source_folder/$file_name" 'file_type'
+					filename="${file_data:13}"
+					getFileTypeV 'file_type' "$source_folder/$filename"
 
 					(( progress_current_size_1_remaining -= file_size, --progress_current_item_1_remaining, progress_current_size_1_processed += file_size, ++progress_current_item_1_processed ))
 
-					if [ "$file_type" == '?' ]; then
-						continue
-					fi
+					[[ "$file_type" == '   ' ]] && continue
 
-					buildTimerV timer
+					getTimerV timer
 
-					shortenFileNameV "/$file_name" "$max_file_name_size" 'file_name_text'
-					file_name_text="${action_color}$file_name_text"
-					formatSizeV $file_size 1 'file_size'
+					shortenFileNameV 'filename_text' "/$filename" "$max_file_name_size"
+					filename_text="${action_color}$filename_text"
+					formatSizeV 'file_size' $file_size 15
 
-					formatSizeV $progress_current_size_1_remaining 1 size_1
-					formatSizeV $progress_current_size_1_processed 1 size_2
+					formatSizeV 'size_1' $progress_current_size_1_remaining 15
+					formatSizeV 'size_2' $progress_current_size_1_processed 15
 
-					getPercentageV $progress_current_item_1_remaining $progress_total_item_1 'progress_current_item_p1_remaining'
-					getPercentageV $progress_current_size_1_remaining $progress_total_size_1 'progress_current_size_p1_remaining'
-					getPercentageV $progress_current_item_1_processed $progress_total_item_1 'progress_current_item_p1_processed'
-					getPercentageV $progress_current_size_1_processed $progress_total_size_1 'progress_current_size_p1_processed'
+					getPercentageV 'progress_current_item_p1_remaining' $progress_current_item_1_remaining $progress_total_item_1
+					getPercentageV 'progress_current_size_p1_remaining' $progress_current_size_1_remaining $progress_total_size_1
+					getPercentageV 'progress_current_item_p1_processed' $progress_current_item_1_processed $progress_total_item_1
+					getPercentageV 'progress_current_size_p1_processed' $progress_current_size_1_processed $progress_total_size_1
 
-					printf -v step_2_progress1 "${TF_LRED}%15d %s >>> ${TF__LRED}%15d %s" ${progress_current_item_1_remaining} "${progress_current_item_p1_remaining}" ${progress_current_item_1_processed} "${progress_current_item_p1_processed}"
+					printf -v step_2_progress1 "${S_NOLRE}%15d %s >>> ${S_LRE}%15d %s" ${progress_current_item_1_remaining} "${progress_current_item_p1_remaining}" ${progress_current_item_1_processed} "${progress_current_item_p1_processed}"
 
-					echo -e "$timer $action_tag $file_size $_file_name_text${TR_ALL}${TM_ClearEndLine}"
-					echo -e "$timer $action_context $step_2_progress1${TR_ALL}"
-					echo -ne "$timer $rotation_status ${PADDING:0:$align_size} $progress_current_size_1_remaining $progress_current_size_p1_remaining $progress_current_size_1_processed $progress_current_size_p1_processed${TR_ALL}\r${TM_Up1}"
+					echo -e "$timer $action_tag $file_size $filename_text${S_R_AL}${ES_CURSOR_TO_LINE_END}"
+					echo -e "$timer $action_context $step_2_progress1${S_R_AL}"
+					echo -ne "$timer $rotationStatus ${PADDING_SPACE:0:align_size} $progress_current_size_1_remaining $progress_current_size_p1_remaining $progress_current_size_1_processed $progress_current_size_p1_processed${S_R_AL}\r${CO_UP_1}"
 
-					copyFullPath "$source_folder" "$excluded_folder" "${file_name%/*}"
-					mv -f "$source_folder/$file_name" "$excluded_folder/$file_name"
-				done
+					clonePathDetails "$source_folder" "$excluded_folder" "${filename%/*}"
+					mv -f "$source_folder/$filename" "$excluded_folder/$filename"
+				done {canal}< <(cat "$pathWorkingDirectoryRAM/Excluded-"{1..9}".files")
 
-				exec {pipe_id[1]}>&-
-
-				printf -v step_2_progress1 "${TF_LRED}%15d %s >>> ${TF__LRED}%15d %s" ${progress_current_item_1_remaining} "${progress_current_item_p1_remaining}" ${progress_current_item_1_processed} "${progress_current_item_p1_processed}"
-				step_2_progress2="$progress_current_size_1_remaining $progress_current_size_p1_remaining $progress_current_size_1_processed $progress_current_size_p1_processed$"
+				printf -v step_2_progress1 "${S_NOLRE}%15d %s >>> ${S_LRE}%15d %s" ${progress_current_item_1_remaining} "${progress_current_item_p1_remaining}" ${progress_current_item_1_processed} "${progress_current_item_p1_processed}"
+				step_2_progress2="$progress_current_size_1_remaining $progress_current_size_p1_remaining $progress_current_size_1_processed $progress_current_size_p1_processed$" # TODO $ ???
 
 				echo
 				echo
 				echo
+
+				rm -f "$pathWorkingDirectoryRAM/Excluded-"{1..9}".files"
 			fi
 
-			makeStatusDone 'Step_2_Current'
+			makeSectionStatusDone 'Step_2-Current' "$hostBackuped"
 		fi
 
-		for checked_folder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5}; do
-			buildTimerV timer
-			echo -ne "\n\n$timer Searching $checked_folder...${TM_ClearEndLine}\r${TM_Up1}${TM_Up1}"
+		for checked_folder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5}; do # TODO : make a constant with this
+			getTimerV timer
+# 			echo -ne "\n\n$timer Searching $checked_folder...${ES_CURSOR_TO_LINE_END}\r${CO_UP_1}${CO_UP_1}"
 
-			if [ "$(checkStatus "Step_2_$checked_folder")" == 'Uncompleted' ]; then
-				source_folder="$PATH_BackupFolder/$checked_folder/$host_backuped"
-				excluded_folder="$PATH_BackupFolder/_Trashed_/Excluded/$checked_folder/$host_backuped"
+			if checkSectionStatus "Step_2-$checked_folder" "$hostBackuped"; then
+				source_folder="$PATH_BACKUP_FOLDER/$hostBackuped/$checked_folder"
+				excluded_folder="$PATH_BACKUP_FOLDER/$TRASH_FOLDER/Excluded/$hostBackuped/$checked_folder"
 
-				action_tag="$A_Excluded"
-				action_color="${TF_LRED}"
+				action_tag="$A_EXCLUDED_R"
+				action_color="${S_NOLRE}"
 
-				action_context="${TF_WHITE}${host_backuped}${TR_ALL} - Trash excluded files -"
-				action_context_size="${host_backuped} - Trash excluded files -"
+				action_context="${S_NOWHI}${hostBackuped}${S_R_AL} - Trash excluded files -"
+				action_context_size="${hostBackuped} - Trash excluded files -"
 
-				initVariablesState_Step_2_Statistics
+				progress_total_item_2=0
+				progress_total_size_2=0
 
-				max_file_name_size="$TIME_SIZE ${A_ActionSpace} $EMPTY_SIZE "
-				(( align_size = ${#action_context_size} - ${#rotation_status_size}, max_file_name_size = $(tput cols) - ${#max_file_name_size} ))
+				max_file_name_size="$TIME_SIZE ${A_TAG_LENGTH_SIZE} $EMPTY_SIZE "
+				(( align_size = ${#action_context_size} - ${#rotationStatusSize}, max_file_name_size = $(tput cols) - ${#max_file_name_size} ))
 
-				exec {pipe_id[1]}<>"$MAIN_PIPE"
+				while read excludedItem; do
+					[[ -z "$excludedItem" ]] && continue
 
-				while read excluded_item; do
-					if [ "$excluded_item" == '' ]; then
-						continue
-					fi
+					excludedItem="${excludedItem:1}"
 
-					excluded_item="${excluded_item:1}"
+					searched_item="$source_folder/$excludedItem"
+					destination_item="$excluded_folder/$excludedItem"
+					getFileTypeV 'searched_item_type' "$source_folder/$excludedItem"
 
-					searched_item="$source_folder/$excluded_item"
-					destination_item="$excluded_folder/$excluded_item"
-					checkItemType "$source_folder/$excluded_item" 'searched_item_type'
+# 					echo ":: CHECK $searched_item ($checked_folder) [$searched_item_type]"
 
-					if [ "$searched_item_type" == '?' ]; then
-						continue
-					elif [ "$searched_item_type" == 'd' ]; then
-						copyFullPath "$source_folder" "$excluded_folder" "$excluded_item"
+					[[ "$searched_item_type" == '   ' ]] && continue
 
-						{
-							find -P "$searched_item" -type f,l,p,s,b,c -printf '%12s %P'
-							echo ':END:'
-						} >&${pipe_id[1]} &
+					regex='^E[ l]d$'
+					if [[ "$searched_item_type" =~ $regex ]]; then
+						clonePathDetails "$source_folder" "$excluded_folder" "$excludedItem"
 
-						while IFS= read -u ${pipe_id[1]} file_data; do
-							if [ ':END:' == "$file_data" ]; then
-								break
-							fi
-
+						while IFS= read -u ${canal} file_data; do
+# 							echo ":: $file_data"
 							file_size="${file_data:0:12}"
-							file_name="${file_data:13}"
-							file_path="${file_name%/*}"
+							filename="${file_data:13}"
+							file_path="${filename%/*}"
 
 							(( progress_total_size_2 += file_size, ++progress_total_item_2 ))
 
-							copyFullPath "$searched_item" "$destination_item" "$file_path"
-							mv -f "$searched_item/$file_name" "$destination_item/$file_name"
+							clonePathDetails "$searched_item" "$destination_item" "$file_path"
+							mv -f "$searched_item/$filename" "$destination_item/$filename"
 
 							showProgress_Step_2
-						done
+						done {canal}< <(find -P "$searched_item" -type f,l,p,s,b,c -printf '%12s %P\n')
 					else
-						file_size=$(getFileSize "$source_folder/$excluded_item")
-						file_name="$excluded_item"
+						echo 'else'
+						getFileSizeV 'file_size' "$source_folder/$excludedItem"
+						filename="$excludedItem"
 
 						(( progress_total_size_2 += file_size, ++progress_total_item_2 ))
 
-						copyFullPath "$source_folder" "$excluded_folder" "${excluded_item/*}"
-						mv -f "$source_folder/$excluded_item" "$excluded_folder/$excluded_item"
+						clonePathDetails "$source_folder" "$excluded_folder" "${excludedItem/*}"
+						mv -f "$source_folder/$excludedItem" "$excluded_folder/$excludedItem"
 
 						showProgress_Step_2
 					fi
 
-				done < "$(getBackupFileName 'Exclude' "$CAT_FILESLIST" 0)"
+				done < "$pathWorkingDirectory/Exclude.items"
 
-				exec {pipe_id[1]}>&-
-
-				makeStatusDone "Step_2_$checked_folder"
+				makeSectionStatusDone "Step_2-$checked_folder" "$hostBackuped"
 			fi
 		done
 
@@ -2339,14 +1644,14 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 		echo
 		echo
 
-		for canal in {1..9}; do
-			output_file_name="$(getBackupFileName "Excluded-${_canal}" "$CAT_FILESLIST" 1)"
-			rm -f "$output_file_name"
-		done
+# 		for canal in {1..9}; do
+# 			output_file_name="$(getBackupFileName "Excluded-${index}" "$CAT_FILESLIST" 1)"
+# 			rm -f "$output_file_name"
+# 		done
 
-		makeStatusDone "Step_2"
+		makeSectionStatusDone 'Step_2' "$hostBackuped"
 	else
-		showTitle "$host_backuped : Remove all excluded files..." "${A_Skipped}"
+		showTitle "$hostBackuped : Remove all excluded files..." "${A_SKIPPED}"
 	fi
 
 
@@ -2358,10 +1663,8 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 ################################################################################
 ################################################################################
 
-	if [ "$(checkStatus 'Step_3')" == 'Done' ]; then
-		showTitle "$host_backuped : Archive modified or removed files..." "${A_Skipped}"
-	else
-		showTitle "$host_backuped : Archive modified or removed files..."
+	if checkSectionStatus 'Step_3' "$hostBackuped"; then
+		showTitle "$hostBackuped : Archive modified or removed files..."
 
 
 
@@ -2369,27 +1672,41 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 #==     Initialize some used variables                                       ==#
 #==============================================================================#
 
-		initStatistics 'step_3' 6
-		if [ $init_stat -eq 1 ]; then
-			stat_step_3[$PROGRESS_TOTAL_ITEM]=$(( ${stat_step_1[$FILE_REMOVED]} + ${stat_step_1[$FILE_UPDATED1]} ))
-			stat_step_3[$PROGRESS_TOTAL_SIZE]=$(( ${stat_step_1[$FILE_SIZE_REMOVED]} + ${stat_step_1[$FILE_SIZE_UPDATED1]} ))
-			stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]=${stat_step_1[$FILE_UPDATED1]}
-			stat_step_3[$PROGRESS_CURRENT_FILES_SIZE]=${stat_step_1[$FILE_SIZE_UPDATED1]}
-			eval "$save_stat_step_3"
+		PROGRESS_TOTAL_ITEM=$(( ${fileCountRemoved} + ${fileCountUpdated1} ))
+		PROGRESS_TOTAL_SIZE=$(( ${fileCountSizeRemoved} + ${fileCountSizeUpdated1} ))
+		PROGRESS_CURRENT_FILES_ITEM=${fileCountUpdated1}
+		PROGRESS_CURRENT_FILES_SIZE=${fileCountSizeUpdated1}
+
+		PROGRESS_CURRENT_ITEM=0
+		PROGRESS_CURRENT_SIZE=0
+
+
+# 		if [ $init_stat -eq 1 ]; then
+# 			PROGRESS_TOTAL_ITEM]=$(( ${FILE_REMOVED]} + ${FILE_UPDATED1]} ))
+# 			PROGRESS_TOTAL_SIZE]=$(( ${FILE_SIZE_REMOVED]} + ${FILE_SIZE_UPDATED1]} ))
+# 			PROGRESS_CURRENT_FILES_ITEM]=${FILE_UPDATED1]}
+# 			PROGRESS_CURRENT_FILES_SIZE]=${FILE_SIZE_UPDATED1]}
+# 			eval "$save_stat_step_3"
+# 		fi
+
+		if [[ -f "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_3.var" ]]; then
+			. "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
+		else
+			declare -p PROGRESS_TOTAL_ITEM PROGRESS_TOTAL_SIZE PROGRESS_CURRENT_FILES_ITEM PROGRESS_CURRENT_FILES_SIZE >| "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
 		fi
 
-		DstExcluded="$PATH_BackupFolder/_Trashed_/Rotation/Day-1/$host_backuped"
-		DstArchive="$PATH_BackupFolder/Day-1/${host_backuped}"
-		SrcArchive="$PATH_BackupFolder/Current/$host_backuped"
+		DstExcluded="$PATH_BACKUP_FOLDER/$TRASH_FOLDER/Rotation/$hostBackuped/Day-1"
+		DstArchive="$PATH_BACKUP_FOLDER/$hostBackuped/Day-1"
+		SrcArchive="$PATH_BACKUP_FOLDER/$hostBackuped/Current"
 
-		if [ "$(checkStatus 'Step_3_Update')" != 'Done' ]; then
+		if checkSectionStatus 'Step_3-Update' "$hostBackuped"; then
 
-			if [ "$RotationNewDay" -eq 1 ]; then
-				Action="$A_Backuped"
-				ActionColor="${TF_YELLOW}"
+			if (( isNewDay == 1 )); then
+				Action="$A_BACKUPED_G"
+				ActionColor="${S_NOYEL}"
 			else
-				Action="$A_Skipped"
-				ActionColor="${TF_CYAN}"
+				Action="$A_SKIPPED"
+				ActionColor="${S_NOCYA}"
 			fi
 
 
@@ -2399,58 +1716,60 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 #==============================================================================#
 # Using cp to ensure permission are keeped with this local copy...
 
-			if [ "${stat_step_1[$FILE_UPDATED1]}" -gt 0 ]; then
+			if (( fileCountUpdated1 > 0 )); then
 
-				__screen_size="$(tput cols)"
+				screenSize="$(tput cols)"
 
-				cat "${FilesListRAM}_${host_backuped}_Updated1" |
-				while read FileName; do
-					if [ ! -f "$SrcArchive/$FileName" ]; then
+				cp -t "$pathWorkingDirectoryRAM/" "$pathWorkingDirectory/Updated1-"{1..9}".files"
+
+				while IFS= read -u ${canal} file_data; do
+
+					size="${file_data:0:12}"
+					filename="${file_data:13}"
+
+					if [[ ! -f "$SrcArchive/$filename" ]]; then
 						continue
 					fi
 
-					getFileSize "$SrcArchive/$FileName" Size
+					(( PROGRESS_CURRENT_FILES_SIZE -= size, --PROGRESS_CURRENT_FILES_ITEM, PROGRESS_CURRENT_SIZE += size, ++PROGRESS_CURRENT_ITEM ))
 
-					(( stat_step_3[$PROGRESS_CURRENT_FILES_SIZE] -= Size, --stat_step_3[$PROGRESS_CURRENT_FILES_ITEM], stat_step_3[$PROGRESS_CURRENT_SIZE] += Size, ++stat_step_3[$PROGRESS_CURRENT_ITEM] ))
+					getTimerV Time
 
-					buildTimer Time
+					getPercentageV P_ExcludingProgressItem  ${PROGRESS_CURRENT_ITEM}  ${PROGRESS_TOTAL_ITEM}
+					getPercentageV P_ExcludingProgressSize  ${PROGRESS_CURRENT_SIZE}  ${PROGRESS_TOTAL_SIZE}
+					getPercentageV P_ExcludingProgressFilesItem  ${PROGRESS_CURRENT_FILES_ITEM}  ${PROGRESS_TOTAL_ITEM}
+					getPercentageV P_ExcludingProgressFilesSize  ${PROGRESS_CURRENT_FILES_SIZE}  ${PROGRESS_TOTAL_SIZE}
 
-					getPercentage P_ExcludingProgressItem  ${stat_step_3[$PROGRESS_CURRENT_ITEM]}  ${stat_step_3[$PROGRESS_TOTAL_ITEM]}
-					getPercentage P_ExcludingProgressSize  ${stat_step_3[$PROGRESS_CURRENT_SIZE]}  ${stat_step_3[$PROGRESS_TOTAL_SIZE]}
-					getPercentage P_ExcludingProgressFilesItem  ${stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]}  ${stat_step_3[$PROGRESS_TOTAL_ITEM]}
-					getPercentage P_ExcludingProgressFilesSize  ${stat_step_3[$PROGRESS_CURRENT_FILES_SIZE]}  ${stat_step_3[$PROGRESS_TOTAL_SIZE]}
+					header_size="$TIME_SIZE ${A_TAG_LENGTH_SIZE} : $EMPTY_SIZE /"
+					(( filenameLength = screenSize - ${#header_size} ))
 
-					header_size="$Time_NC ${A_ActionSpace} : $EMPTY_SIZE /"
-					(( __file_name_length = __screen_size - ${#header_size} ))
+					shortenFileNameV 'filenameText' "$filename" "$filenameLength"
 
-					shortenFileName 'file_name_text' "$FileName" "$__file_name_length"
+					filenameText="${ActionColor}$filenameText${S_R_AL}"
+					formatSizeV 'size' $size
+					formatSizeV 'Size1' ${PROGRESS_CURRENT_SIZE} 15
+					formatSizeV 'Size2' ${PROGRESS_CURRENT_FILES_SIZE} 15
 
-					file_name_text="${ActionColor}$file_name_text${TR_ALL}"
-					formatSize $Size Size
-					formatSize ${stat_step_3[$PROGRESS_CURRENT_SIZE]} Size1 1
-					formatSize ${stat_step_3[$PROGRESS_CURRENT_FILES_SIZE]} Size2 1
+					echo -e "$Time $Action : $size $filenameText${ES_CURSOR_TO_LINE_END}"
+					echo -ne "$Time ${S_BOWHI}>>>${S_R_AL} $rotationStatus ($hostBackuped) Archive modified files : ${S_NOWHI}${PROGRESS_CURRENT_ITEM}${S_R_AL} $P_ExcludingProgressItem ($Size1 $P_ExcludingProgressSize) - ${S_NOYEL}${PROGRESS_CURRENT_FILES_ITEM}${S_R_AL} $P_ExcludingProgressFilesItem ($Size2 $P_ExcludingProgressFilesSize)\r"
 
-					echo -e "$Time $Action : $Size $file_name_text${TM_ClearEndLine}"
-					echo -ne "$Time ${TS__BOLD_WHITE}>>>${TR_ALL} $rotation_status ($host_backuped) Archive modified files : ${TF_WHITE}${stat_step_3[$PROGRESS_CURRENT_ITEM]}${TR_ALL} $P_ExcludingProgressItem ($Size1 $P_ExcludingProgressSize) - ${TF_YELLOW}${stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]}${TR_ALL} $P_ExcludingProgressFilesItem ($Size2 $P_ExcludingProgressFilesSize)\r"
-
-					if [ "$RotationNewDay" -eq 1 ]; then
-						copyFullPath "$SrcArchive" "$DstArchive" "${FileName%/*}"
-						if [ -f "$DstArchive/$FileName" ]; then
-							copyFullPath "$DstArchive" "$DstExcluded" "${FileName%/*}"
-							mv -f "$DstArchive/$FileName" "$DstExcluded/$FileName"
+					if (( isNewDay == 1 )); then
+						clonePathDetails "$SrcArchive" "$DstArchive" "${filename%/*}"
+						if [[ -f "$DstArchive/$filename" ]]; then
+							clonePathDetails "$DstArchive" "$DstExcluded" "${filename%/*}"
+							mv -f "$DstArchive/$filename" "$DstExcluded/$filename"
 						fi
-						cp -fP --preserve=mode,ownership,timestamps,links --remove-destination "$SrcArchive/$FileName" "$DstArchive/$FileName"
-						eval "$save_stat_step_3"
+						cp -fP --preserve=mode,ownership,timestamps,links --remove-destination "$SrcArchive/$filename" "$DstArchive/$filename"
 					fi
-				done
-				eval "$save_stat_step_3"
+				done {canal}< <(cat "$pathWorkingDirectoryRAM/Updated1-"{1..9}".files")
+
+				rm -f "$pathWorkingDirectoryRAM/Updated1-"{1..9}".files"
+
+				declare -p PROGRESS_TOTAL_ITEM PROGRESS_TOTAL_SIZE PROGRESS_CURRENT_FILES_ITEM PROGRESS_CURRENT_FILES_SIZE >| "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
 			fi
 
-			eval "$keep_stat_step_3"
-			makeStatusDone 'Step_3_Update'
+			makeSectionStatusDone 'Step_3-Update' "$hostBackuped"
 		fi
-
-		eval "$load_stat_step_3"
 
 
 
@@ -2458,63 +1777,64 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 #==     Move the removed files to the archive                                ==#
 #==============================================================================#
 
-		if [ "$(checkStatus 'Step_3_Remove')" != 'Done' ]; then
-			if [ "${stat_step_1[$FILE_REMOVED]}" -gt 0 ]; then
+		if checkSectionStatus 'Step_3-Remove' "$hostBackuped"; then
+			if (( fileCountRemoved > 0 )); then
 
-				if [ "$(checkStatus 'Step_3_Remove_Init')" != 'Done' ]; then
-					stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]=${stat_step_1[$FILE_REMOVED]}
-					stat_step_3[$PROGRESS_CURRENT_FILES_SIZE]=${stat_step_1[$FILE_SIZE_REMOVED]}
+				PROGRESS_CURRENT_FILES_ITEM=${fileCountRemoved}
+				PROGRESS_CURRENT_FILES_SIZE=${fileCountSizeRemoved}
 
-					makeStatusDone 'Step_3_Remove_Init'
-				fi
+				Action="$A_BACKUPED_G"
+				ActionColor="${S_NOYEL}"
 
-				Action="$A_Backuped"
-				ActionColor="${TF_YELLOW}"
+				screenSize="$(tput cols)"
 
-				__screen_size="$(tput cols)"
+				cp -t "$pathWorkingDirectoryRAM" "$pathWorkingDirectory/Removed-"{1..9}".files"
 
-				cat "${FilesListRAM}_${host_backuped}_Removed" |
-				while read FileName; do
-					if [ ! -f "$SrcArchive/$FileName" ]; then
+				while IFS= read -u ${canal} file_data; do
+
+					size="${file_data:0:12}"
+					filename="${file_data:13}"
+
+					if [[ ! -f "$SrcArchive/$filename" ]]; then
 						continue
 					fi
 
-					getFileSize "$SrcArchive/$FileName" Size
+					(( PROGRESS_CURRENT_FILES_SIZE -= size, --PROGRESS_CURRENT_FILES_ITEM, PROGRESS_CURRENT_SIZE += size, ++PROGRESS_CURRENT_ITEM ))
 
-					(( stat_step_3[$PROGRESS_CURRENT_FILES_SIZE] -= Size, --stat_step_3[$PROGRESS_CURRENT_FILES_ITEM], stat_step_3[$PROGRESS_CURRENT_SIZE] += Size, ++stat_step_3[$PROGRESS_CURRENT_ITEM] ))
+					getTimerV Time
 
-					buildTimer Time
+					getPercentageV P_ExcludingProgressItem  ${PROGRESS_CURRENT_ITEM}  ${PROGRESS_TOTAL_ITEM}
+					getPercentageV P_ExcludingProgressSize  ${PROGRESS_CURRENT_SIZE}  ${PROGRESS_TOTAL_SIZE}
+					getPercentageV P_ExcludingProgressFilesItem  ${PROGRESS_CURRENT_FILES_ITEM}  ${PROGRESS_TOTAL_ITEM}
+					getPercentageV P_ExcludingProgressFilesSize  ${PROGRESS_CURRENT_FILES_SIZE}  ${PROGRESS_TOTAL_SIZE}
 
-					getPercentage P_ExcludingProgressItem  ${stat_step_3[$PROGRESS_CURRENT_ITEM]}  ${stat_step_3[$PROGRESS_TOTAL_ITEM]}
-					getPercentage P_ExcludingProgressSize  ${stat_step_3[$PROGRESS_CURRENT_SIZE]}  ${stat_step_3[$PROGRESS_TOTAL_SIZE]}
-					getPercentage P_ExcludingProgressFilesItem  ${stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]}  ${stat_step_3[$PROGRESS_TOTAL_ITEM]}
-					getPercentage P_ExcludingProgressFilesSize  ${stat_step_3[$PROGRESS_CURRENT_FILES_SIZE]}  ${stat_step_3[$PROGRESS_TOTAL_SIZE]}
+					header_size="$TIME_SIZE ${A_TAG_LENGTH_SIZE} : $EMPTY_SIZE /"
+					(( filenameLength = screenSize - ${#header_size} ))
 
-					header_size="$Time_NC ${A_ActionSpace} : $EMPTY_SIZE /"
-					(( __file_name_length = __screen_size - ${#header_size} ))
+					shortenFileNameV 'filenameText' "$filename" "$filenameLength"
 
-					shortenFileName 'file_name_text' "$FileName" "$__file_name_length"
+					filenameText="${ActionColor}$filenameText${S_R_AL}"
+					formatSizeV 'size' $size
+					formatSizeV 'Size1' ${PROGRESS_CURRENT_SIZE} 15
+					formatSizeV 'Size2' ${PROGRESS_CURRENT_FILES_SIZE} 15
 
-					file_name_text="${ActionColor}$file_name_text${TR_ALL}"
-					formatSize $Size Size
-					formatSize ${stat_step_3[$PROGRESS_CURRENT_SIZE]} Size1 1
-					formatSize ${stat_step_3[$PROGRESS_CURRENT_FILES_SIZE]} Size2 1
+					echo -e "$Time $Action : $size $filenameText${ES_CURSOR_TO_LINE_END}"
+					echo -ne "$Time ${S_BOWHI}>>>${S_R_AL} $rotationStatus ($hostBackuped) Archive removed files : ${S_NOWHI}${PROGRESS_CURRENT_ITEM}${S_R_AL} $P_ExcludingProgressItem ($Size1 $P_ExcludingProgressSize) - ${S_NORED}${PROGRESS_CURRENT_FILES_ITEM}${S_R_AL} $P_ExcludingProgressFilesItem ($Size2 $P_ExcludingProgressFilesSize)\r"
 
-					echo -e "$Time $Action : $Size $file_name_text${TM_ClearEndLine}"
-					echo -ne "$Time ${TS__BOLD_WHITE}>>>${TR_ALL} $rotation_status ($host_backuped) Archive removed files : ${TF_WHITE}${stat_step_3[$PROGRESS_CURRENT_ITEM]}${TR_ALL} $P_ExcludingProgressItem ($Size1 $P_ExcludingProgressSize) - ${TF_RED}${stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]}${TR_ALL} $P_ExcludingProgressFilesItem ($Size2 $P_ExcludingProgressFilesSize)\r"
-
-					copyFullPath "$SrcArchive" "$DstArchive" "${FileName%/*}"
-					if [ -f "$DstArchive/$FileName" ]; then
-						copyFullPath "$DstArchive" "$DstExcluded" "${FileName%/*}"
-						mv -f "$DstArchive/$FileName" "$DstExcluded/$FileName"
+					clonePathDetails "$SrcArchive" "$DstArchive" "${filename%/*}"
+					if [[ -f "$DstArchive/$filename" ]]; then
+						clonePathDetails "$DstArchive" "$DstExcluded" "${filename%/*}"
+						mv -f "$DstArchive/$filename" "$DstExcluded/$filename"
 					fi
-					mv -f "$SrcArchive/$FileName" "$DstArchive/$FileName"
-					eval "$save_stat_step_3"
-				done
+					mv -f "$SrcArchive/$filename" "$DstArchive/$filename"
+				done  {canal}< <(cat "$pathWorkingDirectoryRAM/Removed-"{1..9}".files")
+
+				declare -p PROGRESS_TOTAL_ITEM PROGRESS_TOTAL_SIZE PROGRESS_CURRENT_FILES_ITEM PROGRESS_CURRENT_FILES_SIZE >| "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
+
+				rm -f "$pathWorkingDirectoryRAM/Removed-"{1..9}".files"
 			fi
 
-			eval "$keep_stat_step_3"
-			makeStatusDone 'Step_3_Remove'
+			makeSectionStatusDone 'Step_3-Remove' "$hostBackuped"
 		fi
 
 
@@ -2523,30 +1843,28 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 #==     Check integrity of files copied in the archive                       ==#
 #==============================================================================#
 
-		if [ "$(checkStatus 'Step_3_Checksum')" != 'Done' ]; then
-			if [ "$RotationNewDay" -eq 1 ] && [ "${stat_step_1[$FILE_UPDATED1]}" -gt 0 ]; then
+		declare -r A_RESENDED="$(getActionTag 'RESENDED' "$S_NOYEL")"
 
-				if [ "$(checkStatus 'Step_3_Checksum_Init')" != 'Done' ]; then
-					stat_step_3[$PROGRESS_TOTAL_ITEM]=${stat_step_1[$FILE_UPDATED1]}
-					stat_step_3[$PROGRESS_TOTAL_SIZE]=${stat_step_1[$FILE_SIZE_UPDATED1]}
-					stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]=${stat_step_1[$FILE_UPDATED1]}
-					stat_step_3[$PROGRESS_CURRENT_FILES_SIZE]=${stat_step_1[$FILE_SIZE_UPDATED1]}
+		if checkSectionStatus 'Step_3-Checksum' "$hostBackuped"; then
+			if (( isNewDay == 1 && fileCountUpdated1 > 0 )); then
 
-					cp -f --remove-destination "${FilesListRAM}_${host_backuped}_Updated1" "${FilesListRAM}_${host_backuped}_ToCheck"
-					echo -n '' > "${FilesListRAM}_${host_backuped}_ToReCheck"
-					cp -f --remove-destination "${FilesListRAM}_${host_backuped}_ToCheck" "${FilesList}_${host_backuped}_ToCheck" &
+				PROGRESS_TOTAL_ITEM=${fileCountUpdated1}
+				PROGRESS_TOTAL_SIZE=${fileCountSizeUpdated1}
+				PROGRESS_CURRENT_FILES_ITEM=${fileCountUpdated1}
+				PROGRESS_CURRENT_FILES_SIZE=${fileCountSizeUpdated1}
 
-					makeStatusDone 'Step_3_Checksum_Init'
-					eval "$save_stat_step_3"
-				fi
+				PROGRESS_CURRENT_ITEM=0
+				PROGRESS_CURRENT_SIZE=0
+
+				cat "$pathWorkingDirectory/Updated1-"{1..9}".files" > "$pathWorkingDirectoryRAM/ToCheck.files"
+				sed -ir 's/^ *[0-9]\+ //' "$pathWorkingDirectoryRAM/ToCheck.files"
+				echo -n '' > "$pathWorkingDirectoryRAM/ToReCheck.files"
 
 				for SizeIndex in {1..5}; do
 
-					if [ "$(checkStatus "Step_3_Checksum_$SizeIndex")" == 'Done' ]; then
+					if ! checkSectionStatus "Step_3-Checksum-$SizeIndex" "$hostBackuped"; then
 						continue
 					fi
-
-					eval "$load_stat_step_3"
 
 					case $SizeIndex in
 						1)
@@ -2576,46 +1894,43 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 						;;
 					esac
 
-					if [ ${stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]} -gt 0 ]; then
-						buildTimer Time
+					if (( PROGRESS_CURRENT_FILES_ITEM > 0 )); then
+						getTimerV Time
 
-						getPercentage P_ExcludingProgressItem  ${stat_step_3[$PROGRESS_CURRENT_ITEM]}  ${stat_step_3[$PROGRESS_TOTAL_ITEM]}
-						getPercentage P_ExcludingProgressSize  ${stat_step_3[$PROGRESS_CURRENT_SIZE]}  ${stat_step_3[$PROGRESS_TOTAL_SIZE]}
-						getPercentage P_ExcludingProgressFilesItem  ${stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]}  ${stat_step_3[$PROGRESS_TOTAL_ITEM]}
-						getPercentage P_ExcludingProgressFilesSize  ${stat_step_3[$PROGRESS_CURRENT_FILES_SIZE]}  ${stat_step_3[$PROGRESS_TOTAL_SIZE]}
+						getPercentageV P_ExcludingProgressItem  ${PROGRESS_CURRENT_ITEM}  ${PROGRESS_TOTAL_ITEM}
+						getPercentageV P_ExcludingProgressSize  ${PROGRESS_CURRENT_SIZE}  ${PROGRESS_TOTAL_SIZE}
+						getPercentageV P_ExcludingProgressFilesItem  ${PROGRESS_CURRENT_FILES_ITEM}  ${PROGRESS_TOTAL_ITEM}
+						getPercentageV P_ExcludingProgressFilesSize  ${PROGRESS_CURRENT_FILES_SIZE}  ${PROGRESS_TOTAL_SIZE}
 
-						formatSize ${stat_step_3[$PROGRESS_CURRENT_SIZE]} Size1 1
-						formatSize ${stat_step_3[$PROGRESS_CURRENT_FILES_SIZE]} Size2 1
+						formatSizeV 'Size1' ${PROGRESS_CURRENT_SIZE} 15
+						formatSizeV 'Size2' ${PROGRESS_CURRENT_FILES_SIZE} 15
 
-						echo -ne "$Time ${TS__BOLD_WHITE}>>>${TR_ALL} $rotation_status ($host_backuped) Checksum of archive ($SizeLimitText :: $Index) : ${TF_GREEN}${stat_step_3[$PROGRESS_CURRENT_ITEM]}${TR_ALL} $P_ExcludingProgressItem ($Size1 $P_ExcludingProgressSize) - ${TF_YELLOW}${stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]}${TR_ALL} $P_ExcludingProgressFilesItem ($Size2 $P_ExcludingProgressFilesSize)\r"
+						echo -ne "$Time ${S_BOWHI}>>>${S_R_AL} $rotationStatus ($hostBackuped) Checksum of archive ($SizeLimitText :: 0) : ${S_NOGRE}${PROGRESS_CURRENT_ITEM}${S_R_AL} $P_ExcludingProgressItem ($Size1 $P_ExcludingProgressSize) - ${S_NOYEL}${PROGRESS_CURRENT_FILES_ITEM}${S_R_AL} $P_ExcludingProgressFilesItem ($Size2 $P_ExcludingProgressFilesSize)\r"
 
 						for Index in {1..10}; do
-							freeCache > /dev/null
-							ssh $host_backuped 'freeCache > /dev/null'
+# 							freeCache > /dev/null
+# 							ssh $hostBackuped 'freeCache > /dev/null'
 
-							stat_step_3[$PROGRESS_CURRENT_RESENDED]=0
+							PROGRESS_CURRENT_RESENDED=0
 
-							__LastAction=0
+							lastAction=0
 
-							rsync -vvitpoglDmc --files-from="${FilesListRAM}_${host_backuped}_ToCheck" --modify-window=5 \
-										--preallocate --inplace --no-whole-file --block-size=32768 $SizeLimit \
-										--info=name2,backup,del,copy --out-format="> %12l %i %n" "$PATH_BackupFolder/Current/$host_backuped" "$PATH_BackupFolder/Day-1/$host_backuped/" |
-							while read Line; do
-								if [ "${Line:0:1}" != '>' ]; then
+							while read -u ${canal} Line; do
+								if [[ "${Line:0:1}" != '>' ]]; then
 									continue
 								fi
 
-								FileName="${Line:27}"
+								filename="${Line:27}"
 
-								if [ "${FileName:(-1)}" == '/' ]; then
+								if [[ "${filename:(-1)}" == '/' ]]; then
 									continue
 								fi
 
-								Size="${Line:2:12}"
+								size="${Line:2:12}"
 
-								if [ "${Line:16:1}" == 'L' ]; then
+								if [[ "${Line:16:1}" == 'L' ]]; then
 									IsFile=0
-									TypeColor="${TS_ITALIC}"
+									TypeColor="${S_IT}"
 								else
 									IsFile=1
 									TypeColor=''
@@ -2623,78 +1938,78 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 
 								ActionUpdateType="${Line:15:1}"
 
-								if [ "$ActionUpdateType" == '.' ]; then
-									if [ $__LastAction -ne 1 ]; then # 1 = Successed
-										Action="$A_Successed"
+								if [[ "$ActionUpdateType" == '.' ]]; then
+									if [[ $lastAction -ne 1 ]]; then # 1 = Successed
+										Action="$A_SUCCESSED"
 
-										ActionColor="${TF_GREEN}"
+										ActionColor="${S_NOGRE}"
 
-										__LastAction=1
+										lastAction=1
 									fi
 
-									(( stat_step_3[$PROGRESS_CURRENT_FILES_SIZE] -= Size, --stat_step_3[$PROGRESS_CURRENT_FILES_ITEM], stat_step_3[$PROGRESS_CURRENT_SIZE] += Size, ++stat_step_3[$PROGRESS_CURRENT_ITEM] ))
+									(( PROGRESS_CURRENT_FILES_SIZE -= size, --PROGRESS_CURRENT_FILES_ITEM, PROGRESS_CURRENT_SIZE += size, ++PROGRESS_CURRENT_ITEM ))
 								else
-									if [ $__LastAction -ne 2 ]; then # 2 = Resended
-										Action="$A_Resended"
+									if [[ $lastAction -ne 2 ]]; then # 2 = Resended
+										Action="$A_RESENDED"
 
-										ActionColor="${TF_YELLOW}"
+										ActionColor="${S_NOYEL}"
 
-										__LastAction=2
+										lastAction=2
 									fi
 
-									(( ++stat_step_3[$PROGRESS_CURRENT_RESENDED] ))
-									echo "$FileName" >> "${FilesListRAM}_${host_backuped}_ToReCheck"
+									(( ++PROGRESS_CURRENT_RESENDED ))
+									echo "$filename" >> "$pathWorkingDirectoryRAM/ToReCheck.files"
 								fi
 
-								buildTimer Time
+								getTimerV Time
 
-								getPercentage P_ExcludingProgressItem  ${stat_step_3[$PROGRESS_CURRENT_ITEM]}  ${stat_step_3[$PROGRESS_TOTAL_ITEM]}
-								getPercentage P_ExcludingProgressSize  ${stat_step_3[$PROGRESS_CURRENT_SIZE]}  ${stat_step_3[$PROGRESS_TOTAL_SIZE]}
-								getPercentage P_ExcludingProgressFilesItem  ${stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]}  ${stat_step_3[$PROGRESS_TOTAL_ITEM]}
-								getPercentage P_ExcludingProgressFilesSize  ${stat_step_3[$PROGRESS_CURRENT_FILES_SIZE]}  ${stat_step_3[$PROGRESS_TOTAL_SIZE]}
+								getPercentageV P_ExcludingProgressItem  ${PROGRESS_CURRENT_ITEM}  ${PROGRESS_TOTAL_ITEM}
+								getPercentageV P_ExcludingProgressSize  ${PROGRESS_CURRENT_SIZE}  ${PROGRESS_TOTAL_SIZE}
+								getPercentageV P_ExcludingProgressFilesItem  ${PROGRESS_CURRENT_FILES_ITEM}  ${PROGRESS_TOTAL_ITEM}
+								getPercentageV P_ExcludingProgressFilesSize  ${PROGRESS_CURRENT_FILES_SIZE}  ${PROGRESS_TOTAL_SIZE}
 
-								header_size="$Time_NC ${A_ActionSpace} : $EMPTY_SIZE /"
-								(( __file_name_length = __screen_size - ${#header_size} ))
+								header_size="$TIME_SIZE ${A_TAG_LENGTH_SIZE} : $EMPTY_SIZE /"
+								(( filenameLength = screenSize - ${#header_size} ))
 
-								shortenFileName 'file_name_text' "$FileName" "$__file_name_length"
+								shortenFileNameV 'filenameText' "$filename" "$filenameLength"
 
-								file_name_text="${ActionColor}$file_name_text${TR_ALL}"
-								formatSize $Size Size
-								formatSize ${stat_step_3[$PROGRESS_CURRENT_SIZE]} Size1 1
-								formatSize ${stat_step_3[$PROGRESS_CURRENT_FILES_SIZE]} Size2 1
+								filenameText="${ActionColor}$filenameText${S_R_AL}"
+								formatSizeV 'size' $size
+								formatSizeV 'Size1' ${PROGRESS_CURRENT_SIZE} 15
+								formatSizeV 'Size2' ${PROGRESS_CURRENT_FILES_SIZE} 15
 
-								echo -e "$Time $Action : $Size $file_name_text${TM_ClearEndLine}"
-								echo -ne "$Time ${TS__BOLD_WHITE}>>>${TR_ALL} $rotation_status ($host_backuped) Checksum of archive ($SizeLimitText :: $Index) : ${TF_RED}${stat_step_3[$PROGRESS_CURRENT_RESENDED]}${TR_ALL} ${TF_GREEN}${stat_step_3[$PROGRESS_CURRENT_ITEM]}${TR_ALL} $P_ExcludingProgressItem ($Size1 $P_ExcludingProgressSize) - ${TF_YELLOW}${stat_step_3[$PROGRESS_CURRENT_FILES_ITEM]}${TR_ALL} $P_ExcludingProgressFilesItem ($Size2 $P_ExcludingProgressFilesSize)\r"
-								eval "$save_stat_step_3"
-							done
+								echo -e "$Time $Action : $size $filenameText${ES_CURSOR_TO_LINE_END}"
+								echo -ne "$Time ${S_BOWHI}>>>${S_R_AL} $rotationStatus ($hostBackuped) Checksum of archive ($SizeLimitText :: $Index) : ${S_NORED}${PROGRESS_CURRENT_RESENDED}${S_R_AL} ${S_NOGRE}${PROGRESS_CURRENT_ITEM}${S_R_AL} $P_ExcludingProgressItem ($Size1 $P_ExcludingProgressSize) - ${S_NOYEL}${PROGRESS_CURRENT_FILES_ITEM}${S_R_AL} $P_ExcludingProgressFilesItem ($Size2 $P_ExcludingProgressFilesSize)\r"
+							done {canal}< <(rsync -vvitpoglDmc --files-from="$pathWorkingDirectoryRAM/ToCheck.files" --modify-window=5 \
+										--preallocate --inplace --no-whole-file --block-size=32768 $SizeLimit \
+										--info=name2,backup,del,copy --out-format="> %12l %i %n" "$PATH_BACKUP_FOLDER/$hostBackuped/Current" "$PATH_BACKUP_FOLDER/$hostBackuped/Day-1/")
 
-							eval "$load_stat_step_3"
-
-							if [ $(wc -l < "${FilesListRAM}_${host_backuped}_ToReCheck") -eq 0 ]; then
+							if (( $(wc -l < "$pathWorkingDirectoryRAM/ToReCheck.files") == 0 )); then
 								break
 							fi
 
-							cp -f --remove-destination "${FilesListRAM}_${host_backuped}_ToReCheck" "${FilesListRAM}_${host_backuped}_ToCheck"
-							echo -n '' > "${FilesListRAM}_${host_backuped}_ToReCheck"
-							cp -f --remove-destination "${FilesListRAM}_${host_backuped}_ToCheck" "${FilesList}_${host_backuped}_ToCheck" &
+							cp -f --remove-destination "$pathWorkingDirectoryRAM/ToReCheck.files" "$pathWorkingDirectoryRAM/ToCheck.files" # TODO : move ???
+							echo -n '' >| "$pathWorkingDirectoryRAM/ToReCheck.files"
 						done
 					fi
 
 					sleep 1
-					cp -f --remove-destination "${FilesListRAM}_${host_backuped}_Updated1" "${FilesListRAM}_${host_backuped}_ToCheck"
-					echo -n '' > "${FilesListRAM}_${host_backuped}_ToReCheck"
-					cp -f --remove-destination "${FilesListRAM}_${host_backuped}_ToCheck" "${FilesList}_${host_backuped}_ToCheck" &
+					cat "$pathWorkingDirectory/Updated1-"{1..9}".files" >| "$pathWorkingDirectoryRAM/ToCheck.files"
+					sed -ir 's/^ *[0-9]\+ //' "$pathWorkingDirectoryRAM/ToCheck.files"
+					echo -n '' >| "$pathWorkingDirectoryRAM/ToReCheck.files"
 
-					makeStatusDone "Step_3_Checksum_$SizeIndex"
+					makeSectionStatusDone "Step_3-Checksum-$SizeIndex" "$hostBackuped"
 				done
 			fi
-			makeStatusDone 'Step_3_Checksum'
+			# TODO : remove ToCheck.files ??
+
+			makeSectionStatusDone 'Step_3-Checksum' "$hostBackuped"
 		fi
 
-		makeStatusDone 'Step_3'
+		makeSectionStatusDone 'Step_3' "$hostBackuped"
 	fi
 
-	rm -f "${FilesListRAM}_${host_backuped}_Removed"
+# 	rm -f "${FilesListRAM}_${hostBackuped}_Removed"
 
 
 
@@ -2706,27 +2021,25 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 ################################################################################
 ################################################################################
 
-	PROGRESS_TOTAL_ITEM=0
-	PROGRESS_TOTAL_SIZE=1
-	PROGRESS_CURRENT_ITEM=2
-	PROGRESS_CURRENT_SIZE=3
-	PROGRESS_CURRENT_FILESA_ITEM=4
-	PROGRESS_CURRENT_FILESA_SIZE=5
-	PROGRESS_CURRENT_FILESU_ITEM=6
-	PROGRESS_CURRENT_FILESU_SIZE=7
-	PROGRESS2_TOTAL_ITEM=8
-	PROGRESS2_TOTAL_SIZE=9
-	PROGRESS2_CURRENT_ITEM=10
-	PROGRESS2_CURRENT_SIZE=11
-	PROGRESS2_CURRENT_FILES_ITEM=12
-	PROGRESS2_CURRENT_FILES_SIZE=13
-	PROGRESS2_CURRENT_RESENDED=14
+# 	PROGRESS_TOTAL_ITEM=0
+# 	PROGRESS_TOTAL_SIZE=1
+# 	PROGRESS_CURRENT_ITEM=2
+# 	PROGRESS_CURRENT_SIZE=3
+# 	PROGRESS_CURRENT_FILESA_ITEM=4
+# 	PROGRESS_CURRENT_FILESA_SIZE=5
+# 	PROGRESS_CURRENT_FILESU_ITEM=6
+# 	PROGRESS_CURRENT_FILESU_SIZE=7
+# 	PROGRESS2_TOTAL_ITEM=8
+# 	PROGRESS2_TOTAL_SIZE=9
+# 	PROGRESS2_CURRENT_ITEM=10
+# 	PROGRESS2_CURRENT_SIZE=11
+# 	PROGRESS2_CURRENT_FILES_ITEM=12
+# 	PROGRESS2_CURRENT_FILES_SIZE=13
+# 	PROGRESS2_CURRENT_RESENDED=14
 
 
-	if [ "$(checkStatus 'Step_4')" == 'Done' ]; then
-		showTitle "$host_backuped : Make the backup for real now..." "${A_Skipped}"
-	else
-		showTitle "$host_backuped : Make the backup for real now..."
+	if checkSectionStatus 'Step_4' "$hostBackuped"; then
+		showTitle "$hostBackuped : Make the backup for real now..."
 
 
 
@@ -2734,33 +2047,33 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 #==     Initialize some used variables                                       ==#
 #==============================================================================#
 
-		initStatistics 'step_4' 15
-		if [ $init_stat -eq 1 ]; then
-			echo -n '' > "${FilesListRAM}_${host_backuped}_ToReCheck"
+		echo -n '' >| "$pathWorkingDirectoryRAM/ToCheck.files"
 
-			if [ "$BRUTAL" -ne 0 ]; then
-				cp -f --remove-destination "${IncludeList}_$host_backuped" "${FilesListRAM}_${host_backuped}_ToBackup"
-				stat_step_4[$PROGRESS_TOTAL_ITEM]=${stat_step_1[$FILE_TOTAL]}
-				stat_step_4[$PROGRESS_TOTAL_SIZE]=${stat_step_1[$FILE_SIZE_TOTAL]}
-				stat_step_4[$PROGRESS_CURRENT_FILESA_ITEM]=${stat_step_1[$FILE_UPTODATE]}
-				stat_step_4[$PROGRESS_CURRENT_FILESA_SIZE]=${stat_step_1[$FILE_SIZE_UPTODATE]}
-				stat_step_4[$PROGRESS_CURRENT_FILESU_ITEM]=$(( stat_step_1[$FILE_UPDATED1] + stat_step_1[$FILE_UPDATED2] + stat_step_1[$FILE_ADDED] ))
-				stat_step_4[$PROGRESS_CURRENT_FILESU_SIZE]=$(( stat_step_1[$FILE_SIZE_UPDATED1] + stat_step_1[$FILE_SIZE_UPDATED2] + stat_step_1[$FILE_SIZE_ADDED] ))
-			else
-				cp -f --remove-destination "${FilesListRAM}_${host_backuped}_Updated2" "${FilesListRAM}_${host_backuped}_ToBackup"
-				cat "${FilesListRAM}_${host_backuped}_Updated1" >> "${FilesListRAM}_${host_backuped}_ToBackup"
-				cat "${FilesListRAM}_${host_backuped}_Added" >> "${FilesListRAM}_${host_backuped}_ToBackup"
-				stat_step_4[$PROGRESS_TOTAL_ITEM]=$(( stat_step_1[$FILE_UPDATED1] + stat_step_1[$FILE_UPDATED2] + stat_step_1[$FILE_ADDED] ))
-				stat_step_4[$PROGRESS_TOTAL_SIZE]=$(( stat_step_1[$FILE_SIZE_UPDATED1] + stat_step_1[$FILE_SIZE_UPDATED2] + stat_step_1[$FILE_SIZE_ADDED] ))
-				stat_step_4[$PROGRESS_CURRENT_FILESA_ITEM]=${stat_step_1[$FILE_ADDED]}
-				stat_step_4[$PROGRESS_CURRENT_FILESA_SIZE]=${stat_step_1[$FILE_SIZE_ADDED]}
-				stat_step_4[$PROGRESS_CURRENT_FILESU_ITEM]=$(( stat_step_1[$FILE_UPDATED1] + stat_step_1[$FILE_UPDATED2] ))
-				stat_step_4[$PROGRESS_CURRENT_FILESU_SIZE]=$(( stat_step_1[$FILE_SIZE_UPDATED1] + stat_step_1[$FILE_SIZE_UPDATED2] ))
-			fi
-
-			eval "$save_stat_step_4"
-			cp -f --remove-destination "${FilesListRAM}_${host_backuped}_ToBackup" "${FilesList}_${host_backuped}_ToBackup"
+		if [ "$BRUTAL" -ne 0 ]; then
+			:
+# 			cp -f --remove-destination "${IncludeList}_$hostBackuped" "${FilesListRAM}_${hostBackuped}_ToBackup"
+# 			PROGRESS_TOTAL_ITEM]=${FILE_TOTAL]}
+# 			PROGRESS_TOTAL_SIZE]=${FILE_SIZE_TOTAL]}
+# 			PROGRESS_CURRENT_FILESA_ITEM]=${FILE_UPTODATE]}
+# 			PROGRESS_CURRENT_FILESA_SIZE]=${FILE_SIZE_UPTODATE]}
+# 			PROGRESS_CURRENT_FILESU_ITEM]=$(( FILE_UPDATED1] + FILE_UPDATED2] + FILE_ADDED] ))
+# 			PROGRESS_CURRENT_FILESU_SIZE]=$(( FILE_SIZE_UPDATED1] + FILE_SIZE_UPDATED2] + FILE_SIZE_ADDED] ))
+		else
+			cat "$pathWorkingDirectory/Updated1-"{1..9}".files" "$pathWorkingDirectory/Updated2-"{1..9}".files" "$pathWorkingDirectory/Added-"{1..9}".files" > "$pathWorkingDirectoryRAM/ToBackup.files"
+			sed -ir 's/^ *[0-9]\+ //' "$pathWorkingDirectoryRAM/ToBackup.files"
+# 			cp -f --remove-destination "${FilesListRAM}_${hostBackuped}_Updated2" "${FilesListRAM}_${hostBackuped}_ToBackup"
+# 			cat "${FilesListRAM}_${hostBackuped}_Updated1" >> "${FilesListRAM}_${hostBackuped}_ToBackup"
+# 			cat "${FilesListRAM}_${hostBackuped}_Added" >> "${FilesListRAM}_${hostBackuped}_ToBackup"
+			PROGRESS_TOTAL_ITEM=$(( fileCountUpdated1 + fileCountUpdated2 + fileCountAdded ))
+			PROGRESS_TOTAL_SIZE=$(( fileCountSizeUpdated1 + fileCountSizeUpdated2 + fileCountSizeAdded ))
+			PROGRESS_CURRENT_FILESA_ITEM=${fileCountAdded}
+			PROGRESS_CURRENT_FILESA_SIZE=${fileCountSizeAdded}
+			PROGRESS_CURRENT_FILESU_ITEM=$(( fileCountUpdated1 + fileCountUpdated2 ))
+			PROGRESS_CURRENT_FILESU_SIZE=$(( fileCountSizeUpdated1 + fileCountSizeUpdated2 ))
 		fi
+
+		PROGRESS_CURRENT_ITEM=0
+		PROGRESS_CURRENT_SIZE=0
 
 		if [ "$BRUTAL" -ne 0 ]; then
 			r='r'
@@ -2770,11 +2083,11 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 			Exclude=''
 		fi
 
-		rm -f "${FilesListRAM}_${host_backuped}_Updated1"
-		rm -f "${FilesListRAM}_${host_backuped}_Updated2"
-		rm -f "${FilesListRAM}_${host_backuped}_Added"
+# 		rm -f "${FilesListRAM}_${hostBackuped}_Updated1"
+# 		rm -f "${FilesListRAM}_${hostBackuped}_Updated2"
+# 		rm -f "${FilesListRAM}_${hostBackuped}_Added"
 
-		__screen_size="$(tput cols)"
+		screenSize="$(tput cols)"
 
 
 
@@ -2783,11 +2096,9 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 #==============================================================================#
 
 		for SizeIndex in {1..5}; do
-			if [ "$(checkStatus "Step_4_${SizeIndex}")" == 'Done' ]; then
+			if ! checkSectionStatus "Step_4-$SizeIndex" "$hostBackuped"; then
 				continue
 			fi
-
-			eval "$load_stat_step_4"
 
 			case $SizeIndex in
 				1)
@@ -2822,52 +2133,50 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 				;;
 			esac
 
-			buildTimer Time $CheckTime
+			getTimerV Time
 
-			getPercentage P_BackupProgressItem  ${stat_step_4[$PROGRESS_CURRENT_ITEM]}  ${stat_step_4[$PROGRESS_TOTAL_ITEM]}
-			getPercentage P_BackupProgressSize  ${stat_step_4[$PROGRESS_CURRENT_SIZE]}  ${stat_step_4[$PROGRESS_TOTAL_SIZE]}
-			getPercentage P_BackupProgressFilesAItem  ${stat_step_4[$PROGRESS_CURRENT_FILESA_ITEM]}  ${stat_step_4[$PROGRESS_TOTAL_ITEM]}
-			getPercentage P_BackupProgressFilesASize  ${stat_step_4[$PROGRESS_CURRENT_FILESA_SIZE]}  ${stat_step_4[$PROGRESS_TOTAL_SIZE]}
-			getPercentage P_BackupProgressFilesUItem  ${stat_step_4[$PROGRESS_CURRENT_FILESU_ITEM]}  ${stat_step_4[$PROGRESS_TOTAL_ITEM]}
-			getPercentage P_BackupProgressFilesUSize  ${stat_step_4[$PROGRESS_CURRENT_FILESU_SIZE]}  ${stat_step_4[$PROGRESS_TOTAL_SIZE]}
+			getPercentageV P_BackupProgressItem  ${PROGRESS_CURRENT_ITEM}  ${PROGRESS_TOTAL_ITEM}
+			getPercentageV P_BackupProgressSize  ${PROGRESS_CURRENT_SIZE}  ${PROGRESS_TOTAL_SIZE}
+			getPercentageV P_BackupProgressFilesAItem  ${PROGRESS_CURRENT_FILESA_ITEM}  ${PROGRESS_TOTAL_ITEM}
+			getPercentageV P_BackupProgressFilesASize  ${PROGRESS_CURRENT_FILESA_SIZE}  ${PROGRESS_TOTAL_SIZE}
+			getPercentageV P_BackupProgressFilesUItem  ${PROGRESS_CURRENT_FILESU_ITEM}  ${PROGRESS_TOTAL_ITEM}
+			getPercentageV P_BackupProgressFilesUSize  ${PROGRESS_CURRENT_FILESU_SIZE}  ${PROGRESS_TOTAL_SIZE}
 
-			formatSize "${stat_step_4[$PROGRESS_CURRENT_SIZE]}" size_total 1
-			formatSize "${stat_step_4[$PROGRESS_CURRENT_FILESA_SIZE]}" size_added 1
-			formatSize "${stat_step_4[$PROGRESS_CURRENT_FILESU_SIZE]}" size_updated 1
+			formatSizeV 'size_total' "${PROGRESS_CURRENT_SIZE}" 15
+			formatSizeV 'size_added' "${PROGRESS_CURRENT_FILESA_SIZE}" 15
+			formatSizeV 'size_updated' "${PROGRESS_CURRENT_FILESU_SIZE}" 15
 
 			if [ "$BRUTAL" -ne 0 ]; then
-				progress="${TS__BOLD_WHITE}>>>${TR_ALL} ${TF_YELLOW}${TB__RED} BRUTAL ${TR_ALL} $rotation_status ($host_backuped) Make the backup for real ($SizeLimitText) : ${TF_WHITE}${stat_step_4[$PROGRESS_CURRENT_ITEM]}${TR_ALL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${TF_GREEN}${stat_step_4[$PROGRESS_CURRENT_FILESA_ITEM]} ${TS_DARK}$P_BackupProgressFilesAItem${TR_ALL} ($size_added ${TF_GREEN}${TS_DARK}$P_BackupProgressFilesASize${TR_ALL}) - ${TF_YELLOW}${stat_step_4[$PROGRESS_CURRENT_FILESU_ITEM]} ${TS_DARK}$P_BackupProgressFilesUItem${TR_ALL} ($size_updated ${TF_YELLOW}${TS_DARK}$P_BackupProgressFilesUSize${TR_ALL})"
+				:
+# 				progress="${S_BOWHI}>>>${S_R_AL} ${S_NOYEL}${TB__RED} BRUTAL ${S_R_AL} $rotationStatus ($hostBackuped) Make the backup for real ($SizeLimitText) : ${S_NOWHI}${PROGRESS_CURRENT_ITEM]}${S_R_AL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${S_NOGRE}${PROGRESS_CURRENT_FILESA_ITEM]} ${S_DA}$P_BackupProgressFilesAItem${S_R_AL} ($size_added ${S_NOGRE}${S_DA}$P_BackupProgressFilesASize${S_R_AL}) - ${S_NOYEL}${PROGRESS_CURRENT_FILESU_ITEM]} ${S_DA}$P_BackupProgressFilesUItem${S_R_AL} ($size_updated ${S_NOYEL}${S_DA}$P_BackupProgressFilesUSize${S_R_AL})"
 			else
-				progress="${TS__BOLD_WHITE}>>>${TR_ALL} $rotation_status ($host_backuped) Make the backup for real ($SizeLimitText) : ${TF_WHITE}${stat_step_4[$PROGRESS_CURRENT_ITEM]}${TR_ALL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${TF_LBLUE}${stat_step_4[$PROGRESS_CURRENT_FILESA_ITEM]} ${TF_BLUE}$P_BackupProgressFilesAItem${TR_ALL} ($size_added ${TF_BLUE}$P_BackupProgressFilesASize${TR_ALL}) - ${TF_YELLOW}${stat_step_4[$PROGRESS_CURRENT_FILESU_ITEM]} ${TS_DARK}$P_BackupProgressFilesUItem${TR_ALL} ($size_updated ${TF_YELLOW}${TS_DARK}$P_BackupProgressFilesUSize${TR_ALL})"
+				progress="${S_BOWHI}>>>${S_R_AL} $rotationStatus ($hostBackuped) Make the backup for real ($SizeLimitText) : ${S_NOWHI}${PROGRESS_CURRENT_ITEM}${S_R_AL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${S_NOLBL}${PROGRESS_CURRENT_FILESA_ITEM} ${S_NOBLU}$P_BackupProgressFilesAItem${S_R_AL} ($size_added ${S_NOBLU}$P_BackupProgressFilesASize${S_R_AL}) - ${S_NOYEL}${PROGRESS_CURRENT_FILESU_ITEM} ${S_DA}$P_BackupProgressFilesUItem${S_R_AL} ($size_updated ${S_NOYEL}${S_DA}$P_BackupProgressFilesUSize${S_R_AL})"
 			fi
 
 			echo -ne "$Time $progress\r"
 
-			__LastAction=0
-			__LastTime=0
+			lastAction=0
+			lastTime=0
 
-			if [ "$(checkStatus "Step_4_${SizeIndex}_Rsync")" != 'Done' ]; then
+			if checkSectionStatus "Step_4-$SizeIndex-Rsync" "$hostBackuped"; then
 
-				stat_step_4[$PROGRESS2_TOTAL_ITEM]=0
-				stat_step_4[$PROGRESS2_TOTAL_SIZE]=0
+				PROGRESS2_TOTAL_ITEM=0
+				PROGRESS2_TOTAL_SIZE=0
 
-				echo -n '' > "${FilesListRAM}_${host_backuped}_ToCheck"
+				echo -n '' >| "$pathWorkingDirectoryRAM/ToCheck.files"
 
-				rsync -vvi${r}tpoglDm --files-from="${FilesList}_${host_backuped}_ToBackup" $Exclude --modify-window=5 -M--munge-links \
-							--preallocate --inplace --no-whole-file $SizeLimit $Compress \
-							--info=name2,backup,del,copy --out-format="> %12l %i %n" $host_backuped:"/" "$PATH_BackupFolder/Current/$host_backuped/" |
-				while read Line; do
-					if [ "${Line:0:1}" != '>' ]; then
+				while read -u ${canal} Line; do
+					if [[ "${Line:0:1}" != '>' ]]; then
 						continue
 					fi
 
-					FileName="${Line:27}"
-					Size="${Line:2:12}"
+					filename="${Line:27}"
+					size="${Line:2:12}"
 
-					if [ "${FileName:(-1)}" != '/' ]; then
-						if [ "${Line:16:1}" == 'L' ]; then
+					if [[ "${filename:(-1)}" != '/' ]]; then
+						if [[ "${Line:16:1}" == 'L' ]]; then
 							IsFile=0
-							TypeColor="${TS_ITALIC}"
+							TypeColor="${S_IT}"
 						else
 							IsFile=1
 							TypeColor=''
@@ -2876,26 +2185,26 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 					else
 						IsDirectory=1
 						IsFile=0
-						TypeColor="${TS_DARK}"
+						TypeColor="${S_DA}"
 					fi
 
 					ActionUpdateType="${Line:15:1}"
 					ActionFlags="${Line:17:9}"
 
-					if [ "$ActionUpdateType" == '.' ]; then
-						if [ "$ActionFlags" == '         ' ]; then
-							if [ $__LastAction -ne 1 ]; then # 1 = UpToDate
-								Action="$A_UpToDate"
+					if [[ "$ActionUpdateType" == '.' ]]; then
+						if [[ "$ActionFlags" == '         ' ]]; then
+							if [[ $lastAction -ne 1 ]]; then # 1 = UpToDate
+								Action="$A_UP_TO_DATE_G"
 								Flags='      '
-								ActionColor="${TF_GREEN}"
+								ActionColor="${S_NOGRE}"
 
-								__LastAction=1
+								lastAction=1
 							fi
 
-							if [ $IsDirectory -ne 1 ]; then
-								if [ "$BRUTAL" -ne 0 ]; then
-									(( stat_step_4[$PROGRESS_CURRENT_FILESA_SIZE] -= Size, --stat_step_4[$PROGRESS_CURRENT_FILESA_ITEM], stat_step_4[$PROGRESS_CURRENT_SIZE] += Size, ++stat_step_4[$PROGRESS_CURRENT_ITEM], stat_step_4[$PROGRESS2_TOTAL_SIZE] += Size, ++stat_step_4[$PROGRESS2_TOTAL_ITEM] ))
-									echo "$FileName" >> "${FilesListRAM}_${host_backuped}_ToCheck"
+							if [[ $IsDirectory -ne 1 ]]; then
+								if [[ "$BRUTAL" -ne 0 ]]; then
+									(( PROGRESS_CURRENT_FILESA_SIZE -= size, --PROGRESS_CURRENT_FILESA_ITEM, PROGRESS_CURRENT_SIZE += size, ++PROGRESS_CURRENT_ITEM, PROGRESS2_TOTAL_SIZE += size, ++PROGRESS2_TOTAL_ITEM ))
+									echo "$filename" >> "$pathWorkingDirectoryRAM/ToCheck.files"
 								else
 									continue
 								fi
@@ -2903,120 +2212,115 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 								continue
 							fi
 						else
-							if [ $__LastAction -ne 2 ]; then # 2 = Update With Flags
-								Action="$A_Updated"
-								ActionColor="${TF_YELLOW}"
+							if [[ $lastAction -ne 2 ]]; then # 2 = Update With Flags
+								Action="$A_UPDATED_Y"
+								ActionColor="${S_NOYEL}"
 
-								__LastAction=2
+								lastAction=2
 							fi
 
 							ActionFlags="${ActionFlags//./ }"
-							getUpdateFlags 'Flags' "$ActionFlags"
+							getUpdateFlagsV 'Flags' "$ActionFlags"
 
-							if [ $IsDirectory -ne 1 ]; then
-								(( stat_step_4[$PROGRESS_CURRENT_FILESU_SIZE] -= Size, --stat_step_4[$PROGRESS_CURRENT_FILESU_ITEM], stat_step_4[$PROGRESS_CURRENT_SIZE] += Size, ++stat_step_4[$PROGRESS_CURRENT_ITEM] ))
-								if [ "$BRUTAL" -ne 0 ]; then
-									(( stat_step_4[$PROGRESS2_TOTAL_SIZE] += Size, ++stat_step_4[$PROGRESS2_TOTAL_ITEM] ))
-									echo "$FileName" >> "${FilesListRAM}_${host_backuped}_ToCheck"
+							if [[ $IsDirectory -ne 1 ]]; then
+								(( PROGRESS_CURRENT_FILESU_SIZE -= size, --PROGRESS_CURRENT_FILESU_ITEM, PROGRESS_CURRENT_SIZE += size, ++PROGRESS_CURRENT_ITEM ))
+								if [[ "$BRUTAL" -ne 0 ]]; then
+									(( PROGRESS2_TOTAL_SIZE += size, ++PROGRESS2_TOTAL_ITEM ))
+									echo "$filename" >> "$pathWorkingDirectoryRAM/ToCheck.files"
 								fi
 							fi
 						fi
 					else
-						if [ "$ActionFlags" == '+++++++++' ]; then
-							if [ $__LastAction -ne 6 ]; then # 6 = Added
-								Action="$A_Added"
+						if [[ "$ActionFlags" == '+++++++++' ]]; then
+							if [[ $lastAction -ne 6 ]]; then # 6 = Added
+								Action="$A_ADDED_B"
 
 								Flags='      '
-								ActionColor="${TF_LBLUE}"
+								ActionColor="${S_NOLBL}"
 
-								__LastAction=6
+								lastAction=6
 							fi
 
-							if [ $IsDirectory -ne 1 ]; then
-								if [ "$BRUTAL" -ne 0 ]; then
-									(( stat_step_4[$PROGRESS_CURRENT_FILESU_SIZE] -= Size, --stat_step_4[$PROGRESS_CURRENT_FILESU_ITEM], stat_step_4[$PROGRESS_CURRENT_SIZE] += Size, ++stat_step_4[$PROGRESS_CURRENT_ITEM], stat_step_4[$PROGRESS2_TOTAL_SIZE] += Size, ++stat_step_4[$PROGRESS2_TOTAL_ITEM] ))
+							if [[ $IsDirectory -ne 1 ]]; then
+								if [[ "$BRUTAL" -ne 0 ]]; then
+									(( PROGRESS_CURRENT_FILESU_SIZE -= size, --PROGRESS_CURRENT_FILESU_ITEM, PROGRESS_CURRENT_SIZE += size, ++PROGRESS_CURRENT_ITEM, PROGRESS2_TOTAL_SIZE += size, ++PROGRESS2_TOTAL_ITEM ))
 								else
-									(( stat_step_4[$PROGRESS_CURRENT_FILESA_SIZE] -= Size, --stat_step_4[$PROGRESS_CURRENT_FILESA_ITEM], stat_step_4[$PROGRESS_CURRENT_SIZE] += Size, ++stat_step_4[$PROGRESS_CURRENT_ITEM], stat_step_4[$PROGRESS2_TOTAL_SIZE] += Size, ++stat_step_4[$PROGRESS2_TOTAL_ITEM] ))
+									(( PROGRESS_CURRENT_FILESA_SIZE -= size, --PROGRESS_CURRENT_FILESA_ITEM, PROGRESS_CURRENT_SIZE += size, ++PROGRESS_CURRENT_ITEM, PROGRESS2_TOTAL_SIZE += size, ++PROGRESS2_TOTAL_ITEM ))
 								fi
-								echo "$FileName" >> "${FilesListRAM}_${host_backuped}_ToCheck"
+								echo "$filename" >> "$pathWorkingDirectoryRAM/ToCheck.files"
 							fi
 						else
-							if [ $__LastAction -ne 3 ]; then # 3 = Updated without flags
-								Action="$A_Updated"
+							if [[ $lastAction -ne 3 ]]; then # 3 = Updated without flags
+								Action="$A_UPDATED_Y"
 
 								Flags='      '
-								ActionColor="${TF_YELLOW}"
+								ActionColor="${S_NOYEL}"
 
-								__LastAction=3
+								lastAction=3
 							fi
 
-							(( stat_step_4[$PROGRESS_CURRENT_FILESU_SIZE] -= Size, --stat_step_4[$PROGRESS_CURRENT_FILESU_ITEM], stat_step_4[$PROGRESS_CURRENT_SIZE] += Size, ++stat_step_4[$PROGRESS_CURRENT_ITEM], stat_step_4[$PROGRESS2_TOTAL_SIZE] += Size, ++stat_step_4[$PROGRESS2_TOTAL_ITEM] ))
-							echo "$FileName" >> "${FilesListRAM}_${host_backuped}_ToCheck"
+							(( PROGRESS_CURRENT_FILESU_SIZE -= size, --PROGRESS_CURRENT_FILESU_ITEM, PROGRESS_CURRENT_SIZE += size, ++PROGRESS_CURRENT_ITEM, PROGRESS2_TOTAL_SIZE += size, ++PROGRESS2_TOTAL_ITEM ))
+							echo "$filename" >> "$pathWorkingDirectoryRAM/ToCheck.files"
 						fi
-						__LastTime=0
+						lastTime=0
 					fi
 
 					printf -v CheckTime '%(%s)T'
-					if [ $CheckTime -gt $__LastTime ]; then
-						__LastTime=$CheckTime
+					if (( CheckTime > lastTime )); then
+						lastTime=$CheckTime
 
-						buildTimer Time $CheckTime
+						getTimerV Time
 
-						getPercentage P_BackupProgressItem  ${stat_step_4[$PROGRESS_CURRENT_ITEM]}  ${stat_step_4[$PROGRESS_TOTAL_ITEM]}
-						getPercentage P_BackupProgressSize  ${stat_step_4[$PROGRESS_CURRENT_SIZE]}  ${stat_step_4[$PROGRESS_TOTAL_SIZE]}
-						getPercentage P_BackupProgressFilesAItem  ${stat_step_4[$PROGRESS_CURRENT_FILESA_ITEM]}  ${stat_step_4[$PROGRESS_TOTAL_ITEM]}
-						getPercentage P_BackupProgressFilesASize  ${stat_step_4[$PROGRESS_CURRENT_FILESA_SIZE]}  ${stat_step_4[$PROGRESS_TOTAL_SIZE]}
-						getPercentage P_BackupProgressFilesUItem  ${stat_step_4[$PROGRESS_CURRENT_FILESU_ITEM]}  ${stat_step_4[$PROGRESS_TOTAL_ITEM]}
-						getPercentage P_BackupProgressFilesUSize  ${stat_step_4[$PROGRESS_CURRENT_FILESU_SIZE]}  ${stat_step_4[$PROGRESS_TOTAL_SIZE]}
+						getPercentageV P_BackupProgressItem  ${PROGRESS_CURRENT_ITEM}  ${PROGRESS_TOTAL_ITEM}
+						getPercentageV P_BackupProgressSize  ${PROGRESS_CURRENT_SIZE}  ${PROGRESS_TOTAL_SIZE}
+						getPercentageV P_BackupProgressFilesAItem  ${PROGRESS_CURRENT_FILESA_ITEM}  ${PROGRESS_TOTAL_ITEM}
+						getPercentageV P_BackupProgressFilesASize  ${PROGRESS_CURRENT_FILESA_SIZE}  ${PROGRESS_TOTAL_SIZE}
+						getPercentageV P_BackupProgressFilesUItem  ${PROGRESS_CURRENT_FILESU_ITEM}  ${PROGRESS_TOTAL_ITEM}
+						getPercentageV P_BackupProgressFilesUSize  ${PROGRESS_CURRENT_FILESU_SIZE}  ${PROGRESS_TOTAL_SIZE}
 
-						formatSize "${stat_step_4[$PROGRESS_CURRENT_SIZE]}" size_total 1
-						formatSize "${stat_step_4[$PROGRESS_CURRENT_FILESA_SIZE]}" size_added 1
-						formatSize "${stat_step_4[$PROGRESS_CURRENT_FILESU_SIZE]}" size_updated 1
+						formatSizeV 'size_total' "${PROGRESS_CURRENT_SIZE}" 15
+						formatSizeV 'size_added' "${PROGRESS_CURRENT_FILESA_SIZE}" 15
+						formatSizeV 'size_updated' "${PROGRESS_CURRENT_FILESU_SIZE}" 15
 
-						header_size="$Time_NC ${A_ActionSpace} : $EMPTY_SIZE ?????? /"
-						(( __file_name_length = __screen_size - ${#header_size} ))
-						if [ "$BRUTAL" -ne 0 ]; then
-							progress="${TS__BOLD_WHITE}>>>${TR_ALL} ${TF_YELLOW}${TB__RED} BRUTAL ${TR_ALL} $rotation_status ($host_backuped) Make the backup for real ($SizeLimitText) : ${TF_WHITE}${stat_step_4[$PROGRESS_CURRENT_ITEM]}${TR_ALL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${TF_GREEN}${stat_step_4[$PROGRESS_CURRENT_FILESA_ITEM]} ${TS_DARK}$P_BackupProgressFilesAItem${TR_ALL} ($size_added ${TF_GREEN}${TS_DARK}$P_BackupProgressFilesASize${TR_ALL}) - ${TF_YELLOW}${stat_step_4[$PROGRESS_CURRENT_FILESU_ITEM]} ${TS_DARK}$P_BackupProgressFilesUItem${TR_ALL} ($size_updated ${TF_YELLOW}${TS_DARK}$P_BackupProgressFilesUSize${TR_ALL})"
+						header_size="$TIME_SIZE ${A_TAG_LENGTH_SIZE} : $EMPTY_SIZE ?????? /"
+						(( filenameLength = screenSize - ${#header_size} ))
+						if [[ "$BRUTAL" -ne 0 ]]; then
+							:
+# 							progress="${S_BOWHI}>>>${S_R_AL} ${S_NOYEL}${TB__RED} BRUTAL ${S_R_AL} $rotationStatus ($hostBackuped) Make the backup for real ($SizeLimitText) : ${S_NOWHI}${PROGRESS_CURRENT_ITEM]}${S_R_AL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${S_NOGRE}${PROGRESS_CURRENT_FILESA_ITEM]} ${S_DA}$P_BackupProgressFilesAItem${S_R_AL} ($size_added ${S_NOGRE}${S_DA}$P_BackupProgressFilesASize${S_R_AL}) - ${S_NOYEL}${PROGRESS_CURRENT_FILESU_ITEM]} ${S_DA}$P_BackupProgressFilesUItem${S_R_AL} ($size_updated ${S_NOYEL}${S_DA}$P_BackupProgressFilesUSize${S_R_AL})"
 						else
-							progress="${TS__BOLD_WHITE}>>>${TR_ALL} $rotation_status ($host_backuped) Make the backup for real ($SizeLimitText) : ${TF_WHITE}${stat_step_4[$PROGRESS_CURRENT_ITEM]}${TR_ALL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${TF_LBLUE}${stat_step_4[$PROGRESS_CURRENT_FILESA_ITEM]} ${TF_BLUE}$P_BackupProgressFilesAItem${TR_ALL} ($size_added ${TF_BLUE}$P_BackupProgressFilesASize${TR_ALL}) - ${TF_YELLOW}${stat_step_4[$PROGRESS_CURRENT_FILESU_ITEM]} ${TS_DARK}$P_BackupProgressFilesUItem${TR_ALL} ($size_updated ${TF_YELLOW}${TS_DARK}$P_BackupProgressFilesUSize${TR_ALL})"
+							progress="${S_BOWHI}>>>${S_R_AL} $rotationStatus ($hostBackuped) Make the backup for real ($SizeLimitText) : ${S_NOWHI}${PROGRESS_CURRENT_ITEM}${S_R_AL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${S_NOLBL}${PROGRESS_CURRENT_FILESA_ITEM} ${S_NOBLU}$P_BackupProgressFilesAItem${S_R_AL} ($size_added ${S_NOBLU}$P_BackupProgressFilesASize${S_R_AL}) - ${S_NOYEL}${PROGRESS_CURRENT_FILESU_ITEM} ${S_DA}$P_BackupProgressFilesUItem${S_R_AL} ($size_updated ${S_NOYEL}${S_DA}$P_BackupProgressFilesUSize${S_R_AL})"
 						fi
 					fi
 
-					shortenFileName 'file_name_text' "$FileName" "$__file_name_length"
-					if [ $IsDirectory -eq 1 ]; then
-						Size="$FOLDER_SIZE"
-					elif [ $IsFile -eq 0 ]; then
-						Size="$SYMLINK_SIZE"
+					shortenFileNameV 'filenameText' "$filename" "$filenameLength"
+					if [[ $IsDirectory -eq 1 ]]; then
+						size="$FOLDER_SIZE"
+					elif [[ $IsFile -eq 0 ]]; then
+						size="$SYMLINK_SIZE"
 					else
-						formatSize "$Size" Size
+						formatSizeV 'size' "$size" 15
 					fi
 
-					file_name_text="${ActionColor}${TypeColor}$file_name_text"
-					Size="${ActionColor}${TypeColor}$Size"
+					filenameText="${ActionColor}${TypeColor}$filenameText"
+					size="${ActionColor}${TypeColor}$size"
 
-					echo -e "$Time $Action : $Size $Flags $file_name_text${TM_ClearEndLine}"
+					echo -e "$Time $Action : $size $Flags $filenameText${ES_CURSOR_TO_LINE_END}"
 					echo -ne "$Time $progress\r"
+				done {canal}< <(rsync -vvi${r}tpoglDm --files-from="$pathWorkingDirectoryRAM/ToBackup.files" $Exclude --modify-window=5 -M--munge-links \
+							--preallocate --inplace --no-whole-file $SizeLimit $compress_details \
+							--info=name2,backup,del,copy --out-format="> %12l %i %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/")
 
-					eval "$save_stat_step_4"
-					echo "$progress" > "$PATH_BackupStatusRAM/progress"
-				done
+				echo -n '' >| "$pathWorkingDirectoryRAM/ToReCheck.files"
 
-				echo -n '' > "${FilesListRAM}_${host_backuped}_ToReCheck"
+				(( PROGRESS2_CURRENT_ITEM = 0, PROGRESS2_CURRENT_SIZE = 0, PROGRESS2_CURRENT_FILES_ITEM = PROGRESS2_TOTAL_ITEM, PROGRESS2_CURRENT_FILES_SIZE = PROGRESS2_TOTAL_SIZE , 1 ))
 
-				eval "$load_stat_step_4"
+# 				if [ -f "$PATH_BackupStatusRAM/progress" ]; then
+# 					progress="$(cat "$PATH_BackupStatusRAM/progress")"
+# 				else
+# 					progress=''
+# 				fi
 
-				(( stat_step_4[$PROGRESS2_CURRENT_ITEM] = 0, stat_step_4[$PROGRESS2_CURRENT_SIZE] = 0, stat_step_4[$PROGRESS2_CURRENT_FILES_ITEM] = stat_step_4[$PROGRESS2_TOTAL_ITEM], stat_step_4[$PROGRESS2_CURRENT_FILES_SIZE] = stat_step_4[$PROGRESS2_TOTAL_SIZE] , 1 ))
-
-				eval "$save_stat_step_4"
-				eval "$keep_stat_step_4"
-
-				if [ -f "$PATH_BackupStatusRAM/progress" ]; then
-					progress="$(cat "$PATH_BackupStatusRAM/progress")"
-				else
-					progress=''
-				fi
-
-				makeStatusDone "Step_4_${SizeIndex}_Rsync"
+				makeSectionStatusDone "Step_4-${SizeIndex}-Rsync" "$hostBackuped"
 			fi
 
 
@@ -3025,63 +2329,60 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 #==     Check integrity of files copied or modified in the backup            ==#
 #==============================================================================#
 
-			eval "$load_stat_step_4"
+			if (( PROGRESS2_TOTAL_ITEM > 0 )); then
 
-			if [ ${stat_step_4[$PROGRESS2_TOTAL_ITEM]} -gt 0 ]; then
+				getTimerV Time
 
-				buildTimer Time
+				getPercentageV P_ChecksumProgressItem  ${PROGRESS2_CURRENT_ITEM}  ${PROGRESS2_TOTAL_ITEM}
+				getPercentageV P_ChecksumProgressSize  ${PROGRESS2_CURRENT_SIZE}  ${PROGRESS2_TOTAL_SIZE}
+				getPercentageV P_ChecksumProgressFilesItem  ${PROGRESS2_CURRENT_FILES_ITEM}  ${PROGRESS2_TOTAL_ITEM}
+				getPercentageV P_ChecksumProgressFilesSize  ${PROGRESS2_CURRENT_FILES_SIZE}  ${PROGRESS2_TOTAL_SIZE}
 
-				getPercentage P_ChecksumProgressItem  ${stat_step_4[$PROGRESS2_CURRENT_ITEM]}  ${stat_step_4[$PROGRESS2_TOTAL_ITEM]}
-				getPercentage P_ChecksumProgressSize  ${stat_step_4[$PROGRESS2_CURRENT_SIZE]}  ${stat_step_4[$PROGRESS2_TOTAL_SIZE]}
-				getPercentage P_ChecksumProgressFilesItem  ${stat_step_4[$PROGRESS2_CURRENT_FILES_ITEM]}  ${stat_step_4[$PROGRESS2_TOTAL_ITEM]}
-				getPercentage P_ChecksumProgressFilesSize  ${stat_step_4[$PROGRESS2_CURRENT_FILES_SIZE]}  ${stat_step_4[$PROGRESS2_TOTAL_SIZE]}
+				formatSizeV 'Size1' ${PROGRESS2_CURRENT_SIZE} 15
+				formatSizeV 'Size2' ${PROGRESS2_CURRENT_FILES_SIZE} 15
 
-				formatSize ${stat_step_4[$PROGRESS2_CURRENT_SIZE]} Size1 1
-				formatSize ${stat_step_4[$PROGRESS2_CURRENT_FILES_SIZE]} Size2 1
+				PROGRESS2_CURRENT_RESENDED=0
 
-				echo -ne "$Time $progress -- -- -- Checksum (?) : ${TF_RED}${stat_step_4[$PROGRESS2_CURRENT_RESENDED]}${TR_ALL} ${TF_GREEN}${stat_step_4[$PROGRESS2_CURRENT_ITEM]}${TR_ALL} $P_ChecksumProgressItem ($Size1 $P_ChecksumProgressSize) - ${TF_YELLOW}${stat_step_4[$PROGRESS2_CURRENT_FILES_ITEM]}${TR_ALL} $P_ChecksumProgressFilesItem ($Size2 $P_ChecksumProgressFilesSize)\r"
+				echo -ne "$Time $progress -- -- -- Checksum (?) : ${S_NORED}${PROGRESS2_CURRENT_RESENDED}${S_R_AL} ${S_NOGRE}${PROGRESS2_CURRENT_ITEM}${S_R_AL} $P_ChecksumProgressItem ($Size1 $P_ChecksumProgressSize) - ${S_NOYEL}${PROGRESS2_CURRENT_FILES_ITEM}${S_R_AL} $P_ChecksumProgressFilesItem ($Size2 $P_ChecksumProgressFilesSize)\r"
 
 				for Index in {1..10}; do
 					freeCache > /dev/null
-					ssh $host_backuped 'freeCache > /dev/null'
+					ssh $hostBackuped 'freeCache > /dev/null'
 
-					stat_step_4[$PROGRESS2_CURRENT_RESENDED]=0
+					PROGRESS2_CURRENT_RESENDED=0
 
 					Offset=1
-					while true; do
-						if [ "$(checkStatus "Step_4_${SizeIndex}_Checksum_$Index-$Offset")" == 'Done' ]; then
+					while [[ 1 ]]; do
+						if ! checkSectionStatus "Step_4-$SizeIndex-Checksum_$Index-$Offset" "$hostBackuped"; then
 							Offset=$(( Offset + OffsetSize ))
 							continue
 						fi
 
-						tail -qn +$Offset "${FilesListRAM}_${host_backuped}_ToCheck" | head -qn $OffsetSize > "${FilesListRAM}_${host_backuped}_ToCheck_Offset"
-						LineCount="$(wc -l < "${FilesListRAM}_${host_backuped}_ToCheck_Offset")"
+						tail -qn +$Offset "$pathWorkingDirectoryRAM/ToCheck.files" | head -qn $OffsetSize >| "$pathWorkingDirectoryRAM/ToCheck-Offset.files"
+						LineCount="$(wc -l < "$pathWorkingDirectoryRAM/ToCheck-Offset.files")"
 
-						if [ "$LineCount" -eq 0 ]; then
+						if (( LineCount == 0 )); then
 							break
 						fi
 
-						__LastAction=0
+						lastAction=0
 
-						rsync -vvitpoglDmc --files-from="${FilesListRAM}_${host_backuped}_ToCheck_Offset" --modify-window=5 \
-									--preallocate --inplace --no-whole-file --block-size=32768 $Compress -M--munge-links \
-									--info=name2,backup,del,copy --out-format="> %12l %i %n" $host_backuped:"/" "$PATH_BackupFolder/Current/$host_backuped/" |
-						while read Line; do
-							if [ "${Line:0:1}" != '>' ]; then
+						while read -u ${canal} Line; do
+							if [[ "${Line:0:1}" != '>' ]]; then
 								continue
 							fi
 
-							FileName="${Line:27}"
+							filename="${Line:27}"
 
-							if [ "${FileName:(-1)}" == '/' ]; then
+							if [[ "${filename:(-1)}" == '/' ]]; then
 								continue
 							fi
 
-							Size="${Line:2:12}"
+							size="${Line:2:12}"
 
-							if [ "${Line:16:1}" == 'L' ]; then
+							if [[ "${Line:16:1}" == 'L' ]]; then
 								IsFile=0
-								TypeColor="${TS_ITALIC}"
+								TypeColor="${S_IT}"
 							else
 								IsFile=1
 								TypeColor=''
@@ -3089,94 +2390,80 @@ for host_backuped in "${HOSTS_LIST[@]}"; do
 
 							ActionUpdateType="${Line:15:1}"
 
-							if [ "$ActionUpdateType" == '.' ]; then
-								if [ $__LastAction -ne 1 ]; then # 1 = Successed
-									Action="$A_Successed"
+							if [[ "$ActionUpdateType" == '.' ]]; then
+								if [[ $lastAction -ne 1 ]]; then # 1 = Successed
+									Action="$A_SUCCESSED"
 
-									ActionColor="${TF_GREEN}"
+									ActionColor="${S_NOGRE}"
 
-									__LastAction=1
+									lastAction=1
 								fi
 
-								(( stat_step_4[$PROGRESS2_CURRENT_FILES_SIZE] -= Size, --stat_step_4[$PROGRESS2_CURRENT_FILES_ITEM], stat_step_4[$PROGRESS2_CURRENT_SIZE] += Size, ++stat_step_4[$PROGRESS2_CURRENT_ITEM] ))
+								(( PROGRESS2_CURRENT_FILES_SIZE -= size, --PROGRESS2_CURRENT_FILES_ITEM, PROGRESS2_CURRENT_SIZE += size, ++PROGRESS2_CURRENT_ITEM ))
 							else
-								if [ $__LastAction -ne 2 ]; then # 2 = Resended
-									Action="$A_Resended"
+								if [[ $lastAction -ne 2 ]]; then # 2 = Resended
+									Action="$A_RESENDED"
 
-									ActionColor="${TF_YELLOW}"
+									ActionColor="${S_NOYEL}"
 
-									__LastAction=2
+									lastAction=2
 								fi
 
-								(( ++stat_step_4[$PROGRESS2_CURRENT_RESENDED] ))
-								echo "$FileName" >> "${FilesListRAM}_${host_backuped}_ToReCheck"
+								(( ++PROGRESS2_CURRENT_RESENDED ))
+								echo "$filename" >> "$pathWorkingDirectoryRAM/ToReCheck.files"
 							fi
 
-							buildTimer Time
+							getTimerV Time
 
-							getPercentage P_ChecksumProgressItem  ${stat_step_4[$PROGRESS2_CURRENT_ITEM]}  ${stat_step_4[$PROGRESS2_TOTAL_ITEM]}
-							getPercentage P_ChecksumProgressSize  ${stat_step_4[$PROGRESS2_CURRENT_SIZE]}  ${stat_step_4[$PROGRESS2_TOTAL_SIZE]}
-							getPercentage P_ChecksumProgressFilesItem  ${stat_step_4[$PROGRESS2_CURRENT_FILES_ITEM]}  ${stat_step_4[$PROGRESS2_TOTAL_ITEM]}
-							getPercentage P_ChecksumProgressFilesSize  ${stat_step_4[$PROGRESS2_CURRENT_FILES_SIZE]}  ${stat_step_4[$PROGRESS2_TOTAL_SIZE]}
+							getPercentageV P_ChecksumProgressItem  ${PROGRESS2_CURRENT_ITEM}  ${PROGRESS2_TOTAL_ITEM}
+							getPercentageV P_ChecksumProgressSize  ${PROGRESS2_CURRENT_SIZE}  ${PROGRESS2_TOTAL_SIZE}
+							getPercentageV P_ChecksumProgressFilesItem  ${PROGRESS2_CURRENT_FILES_ITEM}  ${PROGRESS2_TOTAL_ITEM}
+							getPercentageV P_ChecksumProgressFilesSize  ${PROGRESS2_CURRENT_FILES_SIZE}  ${PROGRESS2_TOTAL_SIZE}
 
-							header_size="$Time_NC ${A_ActionSpace} : $EMPTY_SIZE /"
-							(( __file_name_length = __screen_size - ${#header_size} ))
+							header_size="$TIME_SIZE ${A_TAG_LENGTH_SIZE} : $EMPTY_SIZE /"
+							(( filenameLength = screenSize - ${#header_size} ))
 
-							shortenFileName 'file_name_text' "$FileName" "$__file_name_length"
+							shortenFileNameV 'filenameText' "$filename" "$filenameLength"
 
-							file_name_text="${ActionColor}$file_name_text${TR_ALL}"
-							formatSize $Size Size
-							formatSize ${stat_step_4[$PROGRESS2_CURRENT_SIZE]} Size1 1
-							formatSize ${stat_step_4[$PROGRESS2_CURRENT_FILES_SIZE]} Size2 1
+							filenameText="${ActionColor}$filenameText${S_R_AL}"
+							formatSizeV 'size' $size
+							formatSizeV 'Size1' ${PROGRESS2_CURRENT_SIZE} 15
+							formatSizeV 'Size2' ${PROGRESS2_CURRENT_FILES_SIZE} 15
 
-							echo -e "$Time $Action : $Size $file_name_text${TM_ClearEndLine}"
-							echo -ne "$Time $progress -- -- -- Checksum ($Index) : ${TF_RED}${stat_step_4[$PROGRESS2_CURRENT_RESENDED]}${TR_ALL} ${TF_GREEN}${stat_step_4[$PROGRESS2_CURRENT_ITEM]}${TR_ALL} $P_ChecksumProgressItem ($Size1 $P_ChecksumProgressSize) - ${TF_YELLOW}${stat_step_4[$PROGRESS2_CURRENT_FILES_ITEM]}${TR_ALL} $P_ChecksumProgressFilesItem ($Size2 $P_ChecksumProgressFilesSize)\r"
+							echo -e "$Time $Action : $size $filenameText${ES_CURSOR_TO_LINE_END}"
+							echo -ne "$Time $progress -- -- -- Checksum ($Index) : ${S_NORED}${PROGRESS2_CURRENT_RESENDED}${S_R_AL} ${S_NOGRE}${PROGRESS2_CURRENT_ITEM}${S_R_AL} $P_ChecksumProgressItem ($Size1 $P_ChecksumProgressSize) - ${S_NOYEL}${PROGRESS2_CURRENT_FILES_ITEM}${S_R_AL} $P_ChecksumProgressFilesItem ($Size2 $P_ChecksumProgressFilesSize)\r"
 
-							eval "$save_stat_step_4"
 							sleep $sleep_duration
-						done
+						done {canal}< <(rsync -vvitpoglDmc --files-from="$pathWorkingDirectoryRAM/ToCheck-Offset.files" --modify-window=5 \
+									--preallocate --inplace --no-whole-file --block-size=32768 $compress_details -M--munge-links \
+									--info=name2,backup,del,copy --out-format="> %12l %i %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/")
 
-						eval "$keep_stat_step_4"
-						eval "$load_stat_step_4"
-
-						makeStatusDone "Step_4_${SizeIndex}_Checksum_$Index-$Offset"
+						makeSectionStatusDone "Step_4-$SizeIndex-Checksum_$Index-$Offset" "$hostBackuped"
 					done
 
-					eval "$load_stat_step_4"
-
-					if [ $(wc -l < "${FilesListRAM}_${host_backuped}_ToReCheck") -eq 0 ]; then
+					if (( $(wc -l < "$pathWorkingDirectoryRAM/ToReCheck.files") == 0 )); then
 						break
 					fi
 
-					cp --remove-destination "${FilesListRAM}_${host_backuped}_ToReCheck" "${FilesListRAM}_${host_backuped}_ToCheck"
-					echo -n '' > "${FilesListRAM}_${host_backuped}_ToReCheck"
-					cp -f --remove-destination "${FilesListRAM}_${host_backuped}_ToCheck" "${FilesList}_${host_backuped}_ToCheck" &
+					cp --remove-destination "$pathWorkingDirectoryRAM/ToReCheck.files" "$pathWorkingDirectoryRAM/ToCheck.files"
+					echo -n '' >| "$pathWorkingDirectoryRAM/ToReCheck.files"
 				done
-				eval "$load_stat_step_4"
-				stat_step_4[$PROGRESS2_CURRENT_RESENDED]=0
-				eval "$save_stat_step_4"
+				PROGRESS2_CURRENT_RESENDED=0
 			fi
-			makeStatusDone "Step_4_${SizeIndex}"
+			makeSectionStatusDone "Step_4-$SizeIndex" "$hostBackuped"
 		done
 
-		makeStatusDone 'Step_4'
+		makeSectionStatusDone 'Step_4' "$hostBackuped"
 	fi
 
 	echo
-
-################################################################################
-################################################################################
-####                                                                        ####
-####     STEP 5 : Check archived files for excluded files removal            ####
-####                                                                        ####
-################################################################################
-################################################################################
-
-
-
 done
 
+backupWorkingDirectory
 
+echo -e "\n\n\nscript finished..."
+
+safeExit # need to debug more the next part... But lazy to do it now xD
 
 ################################################################################
 ################################################################################
@@ -3187,35 +2474,35 @@ done
 ################################################################################
 
 Action="$A_Removed"
-ActionColor="${TF_GREEN}${TS_DARK}"
-Size="${TF_GREEN}${TS_DARK}$FOLDER_SIZE"
+ActionColor="${S_NOGRE}${S_DA}"
+size="${S_NOGRE}${S_DA}$FOLDER_SIZE"
 
-if [ $DayOfWeek -eq 4 ]; then
+if (( dayOfWeek == 4 )); then
 	showTitle "Remove all empty folders..."
 
-	__screen_size="$(tput cols)"
+	screenSize="$(tput cols)"
 
 	count=0
 
-	find -P "$PATH_BackupFolder" -type d -empty -print -delete |
+	find -P "$PATH_BACKUP_FOLDER" -type d -empty -print -delete |
 	while read Folder; do
-		buildTimer Time
+		getTimerV Time
 
-		FileName="${Folder:${#PATH_BackupFolder}}"
+		filename="${Folder:${#PATH_BACKUP_FOLDER}}"
 
-		header_size="$Time_NC : $EMPTY_SIZE [ UP TO DATE ] /"
-		(( __file_name_length = __screen_size - ${#header_size}, ++count ))
+		header_size="$TIME_SIZE : $EMPTY_SIZE [ UP TO DATE ] /"
+		(( filenameLength = screenSize - ${#header_size}, ++count ))
 
-		shortenFileName 'file_name_text' "${FileName:1}" "$__file_name_length"
+		shortenFileNameV 'filenameText' "${filename:1}" "$filenameLength"
 
-		file_name_text="${ActionColor}${TypeColor}$file_name_text${TR_ALL}"
+		filenameText="${ActionColor}${TypeColor}$filenameText${S_R_AL}"
 
-		echo -e "$Time $Size $Action $file_name_text${TM_ClearEndLine}"
-		echo -ne "$Time ${TS__BOLD_WHITE}>>>${TR_ALL} $rotation_status Remove empty folders : ${TF_WHITE}$count${TR_ALL}\r"
+		echo -e "$Time $size $Action $filenameText${ES_CURSOR_TO_LINE_END}"
+		echo -ne "$Time ${S_BOWHI}>>>${S_R_AL} $rotationStatus Remove empty folders : ${S_NOWHI}$count${S_R_AL}\r"
 	done
 	echo
 else
-	showTitle "Remove all empty folders..." "$A_Skipped"
+	showTitle "Remove all empty folders..." "$A_SKIPPED"
 fi
 
 ################################################################################
@@ -3228,48 +2515,85 @@ fi
 
 if [ "$(checkStatus 'CountFileEnd')" != 'Done' ]; then
 	echo
-	for base_folder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5} Current; do
-		for host_folder in "${HOSTS_LIST[@]}"; do
-			if [ -d "$PATH_BackupFolder/_Trashed_/Excluded/$base_folder/$host_folder" ]; then
-				countFiles "_Trashed_/Excluded/$base_folder/$host_folder" "End"
+	for dateFolder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5} Current; do
+		for hostFolder in "${HOSTS_LIST[@]}"; do
+			if [ -d "$PATH_BACKUP_FOLDER/_Trashed_/Excluded/$dateFolder/$hostFolder" ]; then
+				countFiles "_Trashed_/Excluded/$dateFolder/$hostFolder" "End"
 			fi
 		done
 	done
-	for base_folder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5}; do
-		for host_folder in "${HOSTS_LIST[@]}"; do
-			if [ -d "$PATH_BackupFolder/_Trashed_/Rotation/$base_folder/$host_folder" ]; then
-				countFiles "_Trashed_/Rotation/$base_folder/$host_folder" "End"
+	for dateFolder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5}; do
+		for hostFolder in "${HOSTS_LIST[@]}"; do
+			if [ -d "$PATH_BACKUP_FOLDER/_Trashed_/Rotation/$dateFolder/$hostFolder" ]; then
+				countFiles "_Trashed_/Rotation/$dateFolder/$hostFolder" "End"
 			fi
 		done
 	done
-	for base_folder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5}; do
-		for host_folder in "${HOSTS_LIST[@]}"; do
-			if [ -d "$PATH_BackupFolder/$base_folder/$host_folder" ]; then
-				countFiles "$base_folder/$host_folder" "End"
+	for dateFolder in Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5}; do
+		for hostFolder in "${HOSTS_LIST[@]}"; do
+			if [ -d "$PATH_BACKUP_FOLDER/$dateFolder/$hostFolder" ]; then
+				countFiles "$dateFolder/$hostFolder" "End"
 			fi
 		done
 	done
-	for host_folder in "${HOSTS_LIST[@]}"; do
-		if [ -d "$PATH_BackupFolder/Current/$host_folder" ]; then
-			countFiles "Current/$host_folder" "End"
+	for hostFolder in "${HOSTS_LIST[@]}"; do
+		if [ -d "$PATH_BACKUP_FOLDER/Current/$hostFolder" ]; then
+			countFiles "Current/$hostFolder" "End"
 		fi
 	done
 
 	makeStatusDone 'CountFileEnd'
 fi
 
-FilesCount=$(find "$PATH_BackupFolder/_Trashed_" -type f -printf '.' | wc -c)
+FilesCount=$(find "$PATH_BACKUP_FOLDER/_Trashed_" -type f -printf '.' | wc -c)
 
 if [ "$FilesCount" -gt 0 ]; then
 	echo
-	echo -e "${TF_YELLOW}${TB__RED}*** LAST CHANCE TO RECOVER ***${TR_ALL}"
-	echo -e "${TF_RED}This is your last chance to recover excluded files from the backup,"
-	echo -e "or overwrited files during the rotation... There is ${TF_LRED}$FilesCount${TF_RED} files in the Trash.${TR_ALL}"
+	echo -e "${S_NOYEL}${S_B_RED}*** LAST CHANCE TO RECOVER ***${S_R_AL}"
+	echo -e "${S_NORED}This is your last chance to recover excluded files from the backup,"
+	echo -e "or overwrited files during the rotation... There is ${S_NOLRE}$FilesCount${S_NORED} files in the Trash.${S_R_AL}"
 fi
 
-rm -rf $PATH_BackupStatusRAM/*
-rm -rf $PATH_BackupStatus/[!_]*
+# rm -rf $PATH_BackupStatusRAM/*
+# rm -rf $PATH_BackupStatus/[!_]*
 
 
 # -z --compress-level=9 --skip-compress=gz/jpg/mp[34]/7z/bz2/zip/rar
 # (7z ace avi bz2 deb gpg gz iso jpeg jpg lz lzma lzo mov mp3 mp4 ogg png rar rpm rzip tbz tgz tlz txz xz z zip)
+
+################################################################################################################################################################
+################################################################################################################################################################
+
+function __change_log__
+{
+	: << 'COMMENT'
+
+	07.07.2019
+		Rebuild since few days all parts of the source code to make it executable again. It work now, but it's just a transition before the commit...
+
+	29.06.2019
+		Add getHostWorkingDirectory function to replace getBackupFileName function.
+
+	28.06.2019
+		Remove initVariablesState_Rotation functions.
+		Renormalize some variables names.
+
+	27.06.2019
+		Remove formatSizeV function that is now in .script_common.sh.
+		Add takeWorkingDirectory, backupWorkingDirectory and clearWorkingDirectory functions to manage
+				temporaries files between sessions (ie if the script crash)
+		Renormalize some variables names.
+
+	26.06.2019
+		Replace the TTY detection with that of .script_common.sh.
+		Remove all the first source code part reserved for testing purpose.
+		Remove all constants that are now contained in .script_common.sh.
+		Remove old actions and colors sub-scripts.
+		Remove error_report function and trap command.
+		Remove getSelectableWord function that is now in .script_common.sh.
+		Remove checkStatus and makeStatusDone functions that is now in .script_common.sh.
+		Remove getFileSizeV, getFileTypeV, getTimerV, copyFolder and clonePathDetails functions that is now in .script_common.sh.
+		Remove shortenFileNameV function that is now in .script_common.sh.
+
+COMMENT
+}
