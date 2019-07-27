@@ -12,7 +12,7 @@
 #	This script can backup some hosts each time and keep archive over time.	   #
 #																			   #
 ################################################################################
-#														23.03.2019 - 26.07.2019
+#														23.03.2019 - 27.07.2019
 
 PATH_INFRASTRUCTURES='/root/Infrastructures'
 
@@ -41,42 +41,6 @@ SCRIPT_NEW_TTY_NO_CLOSE='NO-CLOSE'
 # CO_GO_TOP_LEFT CO_UP_1 PADDING_EQUAL A_BACKUPED_Y SO_INSERT_1 screenWidth
 #
 ################################################################################################################################################################
-
-#==============================================================================#
-#==     Constants Definition                                                 ==#
-#==============================================================================#
-
-declare -r PATH_BACKUP_FOLDER='/root/BackupFolder/TEST'			# The path of the backup folder in the BackupSystem virtual machine...
-declare -r PATH_HOST_BACKUPED_FOLDER='/root/HostBackuped'
-
-declare -r STATUS_FOLDER="_Backup_Status_"
-declare -r TRASH_FOLDER="_Trashed_"
-declare -r VARIABLES_FOLDER="Variables_State"
-
-declare -r PATHFILE_LAST_BACKUP_DATE="$PATH_BACKUP_FOLDER/$STATUS_FOLDER/_LastBackupDate"
-declare -r PATH_STATIC_WORKING_DIRECTORY="$PATH_BACKUP_FOLDER/$STATUS_FOLDER/WorkingDirectory"
-
-# CAT_STATUS="Status"
-# CAT_VARIABLES_STATE="VarState"
-# CAT_STATISTICS="Statistics"
-# CAT_FILESLIST="FilesList"
-
-# declare -ar HOSTS_LIST=( 'BravoTower' 'Router' )
-declare -ar HOSTS_LIST=( 'Router' )
-declare -ar PERIOD_FOLDERS=( Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5} )
-
-declare -ri BRUTAL=0		# 1 = Force a whole files backup to syncronize all !! (can be very very looooong...)
-
-declare -ri SKIP_INTERVAL=31
-
-
-
-#==============================================================================#
-#==     Globals variables definition                                         ==#
-#==============================================================================#
-
-declare posFilename=''
-
 
 
 ################################################################################
@@ -109,14 +73,14 @@ function clearWorkingDirectory
 	return 0
 }
 
-function getHostWorkingDirectory
-{
-	local -ir in_memory=${1:-0}
-
-	(( in_memory > 0 )) &&
-		echo "$PATH_TMP/MEMORY/$hostBackuped" ||
-		echo "$PATH_TMP/$hostBackuped"
-}
+# function getHostWorkingDirectory
+# {
+# 	local -ir in_memory=${1:-0}
+#
+# 	(( in_memory > 0 )) &&
+# 		echo "$PATH_TMP/MEMORY/$hostBackuped" ||
+# 		echo "$PATH_TMP/$hostBackuped"
+# }
 
 # function getBackupFileName()
 # {
@@ -168,6 +132,20 @@ function getHostWorkingDirectory
 # 	fi
 # }
 
+function makeSectionStatusDoneX
+{
+	local -r section_name="${1}"
+	local    section_path="${2:-.}"
+
+	local -i canal
+	local    filename
+
+	makeSectionStatusDone "$section_name" "$section_path"
+
+	while read -u ${canal} filename; do
+		cp "$PATH_TMP/$filename" "$PATH_STATIC_WORKING_DIRECTORY/$filename"
+	done {canal}< <(find "$PATH_TMP/" -type f -name 'section-*.txt' -printf '%P\n')
+}
 function updateScreenCurrentAction
 {
 	local -r action="${1:-}"
@@ -227,17 +205,17 @@ function echoStatPercent
 function echoFilename
 {
 	local filename="${1}"
-	local size=${2}
+	local file_size=${2}
 	local tag="${3}"
 	local color="${4}"
 
 	local timer
 
 	getTimerV timer
-	formatSizeV size $size 12
+	formatSizeV file_size $file_size 12
 	shortenFileNameV filename "$filename" $filenameMaxSize
 
-	echo -en "${posFilename}${SO_INSERT_1}${timer} ${tag} ${size} ${color}${filename}${S_R_AL}"
+	echo -en "${posFilename}${SO_INSERT_1}${timer} ${tag} ${file_size} ${color}${filename}${S_R_AL}"
 }
 
 # function showTitle()
@@ -611,15 +589,15 @@ function countFiles()
 
 				(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 '' '')") ))
 
-				exec {canal_stat}>>"$pathWorkingDirectoryRAM/$log_filename"
+				exec {canal_stat}>>"$pathHWDR/$log_filename"
 
 				local -i count_files=0 count_size=0
 
-				while IFS= read -u ${canal} file_data; do	# TODO use multi vars - check whole source code for this...
-					echo "$file_data" >&${canal_stat}
+				while IFS= read -u ${canal} fileData; do	# TODO use multi vars - check whole source code for this...
+					echo "$fileData" >&${canal_stat}
 
-					file_size=${file_data:0:12}
-					filename="${file_data:19}"
+					file_size=${fileData:0:12}
+					filename="${fileData:19}"
 
 					((	count_size += file_size,
 						++count_files,
@@ -637,9 +615,9 @@ function countFiles()
 				echoStat $count_files $count_size "${pos_value}" "${S_NOWHI}"
 
 				exec {canal_stat}>&-
-				mv "$pathWorkingDirectoryRAM/$log_filename" "$pathWorkingDirectory/$log_filename"
+				mv "$pathHWDR/$log_filename" "$pathHWDD/$log_filename"
 
-				makeSectionStatusDone "Rotation-$host_folder-Count" $hostBackuped
+				makeSectionStatusDoneX "Rotation-$host_folder-Count" $hostBackuped
 			fi
 
 			(( column_index += 45 ))
@@ -649,7 +627,7 @@ function countFiles()
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
-		makeSectionStatusDone 'Rotation-Count' $hostBackuped
+		makeSectionStatusDoneX 'Rotation-Count' $hostBackuped
 	fi
 
 
@@ -738,7 +716,7 @@ function countFiles()
 #
 # 		(( max_file_name_size = $(tput cols) - ${#max_file_name_size} ))
 #
-# 		exec {canal_stat}>"$pathWorkingDirectoryRAM/$log_filename"
+# 		exec {canal_stat}>"$pathHWDR/$log_filename"
 #
 # 		local action="${A_REMOVED_R}"
 # 		local action_color="${S_NORED}"
@@ -761,11 +739,11 @@ function countFiles()
 # 		exec {canal_stat}>&-
 #
 # 		echo "$count_files_trashed $count_size_trashed" >> "$PATHFILE_ROTATION_STATISTICS"
-# 		mv "$pathWorkingDirectoryRAM/$log_filename" "$pathWorkingDirectory/$log_filename"
+# 		mv "$pathHWDR/$log_filename" "$pathHWDD/$log_filename"
 #
 # 		echo -ne "${ES_ENTIRE_LINE}\n${ES_ENTIRE_LINE}\r"
 #
-# 		makeSectionStatusDone 'Rotation-Trash' $hostBackuped
+# 		makeSectionStatusDoneX 'Rotation-Trash' $hostBackuped
 # 	fi
 # }
 
@@ -868,7 +846,7 @@ function rotateFolder
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
-				exec {canal_stat}>>"$pathWorkingDirectoryRAM/$log_filename"
+				exec {canal_stat}>>"$pathHWDR/$log_filename"
 
 				local -i count_removed_files=0		count_removed_files_size=0
 				local -i count_overwrited_files=0	count_overwrited_files_size=0
@@ -905,7 +883,7 @@ function rotateFolder
 
 					(( count_operation[index] += count_removed_files )) || :
 
-					makeSectionStatusDone "Rotation-$host_folder-$source-Trash" $hostBackuped
+					makeSectionStatusDoneX "Rotation-$host_folder-$source-Trash" $hostBackuped
 				fi
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
@@ -943,8 +921,8 @@ function rotateFolder
 								++skip_output % SKIP_INTERVAL == 0 )) && {
 									echoStat $count_overwrited_files $count_overwrited_files_size "${pos_value2}" "${S_NORED}"
 									echoStat $totalFilesOverwrited $totalSizeOverwrited "${pos_total2}" "${S_NORED}"
-									echoFilename "$filename" $file_size "$A_BACKUPED_Y" "$S_NORED"
 								}
+								echoFilename "$filename" $file_size "$A_BACKUPED_Y" "$S_NORED"
 							fi
 
 							[[ -n "$path_name" ]] &&
@@ -961,9 +939,9 @@ function rotateFolder
 							++skip_output % SKIP_INTERVAL == 0 )) && {
 								echoStat $count_moved_files $count_moved_files_size "${pos_value3}" "$S_NOYEL"
 								echoStat $totalFilesMoved $totalSizeMoved "${pos_total3}" "$S_NOYEL"
-								[[ "$check_dest" == '   ' ]] &&
-									echoFilename "$filename" $file_size "$A_MOVED_G" "$S_NOYEL"
 							}
+							[[ "$check_dest" == '   ' ]] &&
+								echoFilename "$filename" $file_size "$A_MOVED_G" "$S_NOYEL"
 						done {canal}< <(find -P "$path_source" -type f,l,p,s,b,c -printf '%12s %y %3d %P\n')
 
 						echoStat $count_overwrited_files $count_overwrited_files_size "${pos_value2}" "${S_NORED}"
@@ -975,21 +953,21 @@ function rotateFolder
 							count_operation[index + 1] += count_overwrited_files)) || :
 					fi
 
-					makeSectionStatusDone "Rotation-$host_folder-$source-Move" $hostBackuped
+					makeSectionStatusDoneX "Rotation-$host_folder-$source-Move" $hostBackuped
 				fi
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
 				exec {canal_stat}>&-
-				mv "$pathWorkingDirectoryRAM/$log_filename" "$pathWorkingDirectory/$log_filename"
+				mv "$pathHWDR/$log_filename" "$pathHWDD/$log_filename"
 
-				makeSectionStatusDone "Rotation-$host_folder-$source" $hostBackuped
+				makeSectionStatusDoneX "Rotation-$host_folder-$source" $hostBackuped
 			fi
 
 			(( column_index += 45 ))
 		done
 
-		makeSectionStatusDone "Rotation-$source" $hostBackuped
+		makeSectionStatusDoneX "Rotation-$source" $hostBackuped
 	fi
 
 # 		local host_folder source_folder destination_folder overwrited_files_folder log_filename
@@ -1013,7 +991,7 @@ function rotateFolder
 #
 # 				log_filename="Rotation-$host_folder-$source.files.log"
 #
-# 				exec {canal_stat}>"$pathWorkingDirectoryRAM/$log_filename"
+# 				exec {canal_stat}>"$pathHWDR/$log_filename"
 #
 # 				action_context="Rotation of ($host_folder) ${S_NOWHI}${source}${S_R_AL} in ${destination}"
 #
@@ -1054,15 +1032,15 @@ function rotateFolder
 # 				exec {canal_stat}>&-
 #
 # 				echo "$count_files_rotation $count_size_rotation" >> "$PATHFILE_ROTATION_STATISTICS"
-# 				mv "$pathWorkingDirectoryRAM/$log_filename" "$pathWorkingDirectory/$log_filename"
+# 				mv "$pathHWDR/$log_filename" "$pathHWDD/$log_filename"
 #
 # 				echo -ne "${ES_ENTIRE_LINE}\n${ES_ENTIRE_LINE}\r"
 #
-# 				makeSectionStatusDone "Rotation-$host_folder-$source" $hostBackuped
+# 				makeSectionStatusDoneX "Rotation-$host_folder-$source" $hostBackuped
 # 			fi
 # 		done
 #
-# 		makeSectionStatusDone "Rotation-$source" $hostBackuped
+# 		makeSectionStatusDoneX "Rotation-$source" $hostBackuped
 # 	fi
 
 }
@@ -1074,7 +1052,7 @@ function openFilesListsSpliter()
 
 	local -i canal_main
 
-	local -r pipe_filename="$pathWorkingDirectoryRAM/${dest_file_name}.pipe"
+	local -r pipe_filename="$pathHWDR/${dest_file_name}.pipe"
 
 	rm -f "$pipe_filename"
 	mkfifo "$pipe_filename"
@@ -1088,7 +1066,7 @@ function openFilesListsSpliter()
 		declare -ai canals=( )
 
 		for index in {1..9}; do
-			output_filename="$pathWorkingDirectoryRAM/${dest_file_name}-$index.files"
+			output_filename="$pathHWDR/${dest_file_name}-$index.files"
 
 # 			echo -n '' > "$output_filename"
 			rm -f "$output_filename"
@@ -1140,7 +1118,7 @@ function closeFilesListsSpliter()
 	local -r dest_file_name="${1}"
 	local -r canal_main="${2}"
 
-	local -r pipe_filename="$pathWorkingDirectoryRAM/${dest_file_name}.pipe"
+	local -r pipe_filename="$pathHWDR/${dest_file_name}.pipe"
 
 	echo "$LOOP_END_TAG" >&${canal_main}
 	sleep 0.5
@@ -1152,7 +1130,7 @@ function closeFilesListsSpliter()
 
 	for index in {1..9}; do
 		output_filename="${dest_file_name}-$index.files"
-		mv "$pathWorkingDirectoryRAM/$output_filename" "$pathWorkingDirectory/$output_filename"
+		mv "$pathHWDR/$output_filename" "$pathHWDD/$output_filename"
 	done
 }
 
@@ -1267,41 +1245,104 @@ function closeFilesListsSpliter()
 
 
 
+
+#MWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWM
+#WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW
+#MWM                                                                                                                                                        WMWM
+#WMW     Script Initialization                                                                                                                              MWMW
+#MWM                                                                                                                                                        WMWM
+#WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW
+#MWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWM
+
 ################################################################################################################################################################
-################################################################################################################################################################
-####                              ##############################################################################################################################
-####     The main script code     ##############################################################################################################################
-####                              ##############################################################################################################################
-################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Constants Definition                                                                                                                                  ##
+##                                                                                                                                                            ##
 ################################################################################################################################################################
 
-declare hostBackuped pathWorkingDirectory pathWorkingDirectoryRAM
+declare -r PATH_BACKUP_FOLDER='/root/BackupFolder/TEST'			# The path of the backup folder in the BackupSystem virtual machine...
+declare -r PATH_HOST_BACKUPED_FOLDER='/root/HostBackuped'
+
+declare -r STATUS_FOLDER="_Backup_Status_"
+declare -r TRASH_FOLDER="_Trashed_"
+declare -r VARIABLES_FOLDER="Variables_State"
+
+declare -r PATHFILE_LAST_BACKUP_DATE="$PATH_BACKUP_FOLDER/$STATUS_FOLDER/_LastBackupDate"
+declare -r PATH_STATIC_WORKING_DIRECTORY="$PATH_BACKUP_FOLDER/$STATUS_FOLDER/WorkingDirectory"
+
+# CAT_STATUS="Status"
+# CAT_VARIABLES_STATE="VarState"
+# CAT_STATISTICS="Statistics"
+# CAT_FILESLIST="FilesList"
+
+# declare -ar HOSTS_LIST=( 'BravoTower' 'Router' )
+declare -ar HOSTS_LIST=( 'Router' )
+declare -ar PERIOD_FOLDERS=( Day-{1..7} Week-{2..4} Month-{2..12} Year-{2..5} )
+
+declare -ri BRUTAL=0		# 1 = Force a whole files backup to syncronize all !! (can be very very looooong...)
+
+declare -r A_RESENDED="$(getActionTag 'RESENDED' "$S_NOYEL")"
+
+declare -ri TYPE_FILE=1
+declare -ri TYPE_FOLDER=2
+declare -ri TYPE_SYMLINK=3
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
-hostBackuped='INITIALIZATION'
+declare -ri SKIP_INTERVAL=31
+
+declare -r POS_TOTAL_1="$(getCSI_CursorMove    Position 4 $(( 1 + (25 * 0) )) )"
+declare -r POS_TOTAL_2="$(getCSI_CursorMove    Position 7 $(( 1 + (25 * 0) )) )"
+declare -r POS_EXCUDED_1="$(getCSI_CursorMove  Position 4 $(( 1 + (25 * 1) )) )"
+declare -r POS_EXCUDED_2="$(getCSI_CursorMove  Position 7 $(( 1 + (25 * 1) )) )"
+declare -r POS_REMOVED_1="$(getCSI_CursorMove  Position 4 $(( 1 + (25 * 2) )) )"
+declare -r POS_REMOVED_2="$(getCSI_CursorMove  Position 7 $(( 1 + (25 * 2) )) )"
+declare -r POS_UPDATED_1="$(getCSI_CursorMove  Position 4 $(( 1 + (25 * 3) )) )"
+declare -r POS_UPDATED_2="$(getCSI_CursorMove  Position 7 $(( 1 + (25 * 3) )) )"
+declare -r POS_ADDED_1="$(getCSI_CursorMove    Position 4 $(( 1 + (25 * 4) )) )"
+declare -r POS_ADDED_2="$(getCSI_CursorMove    Position 7 $(( 1 + (25 * 4) )) )"
+declare -r POS_UPTODATE_1="$(getCSI_CursorMove Position 4 $(( 1 + (25 * 5) )) )"
+declare -r POS_UPTODATE_2="$(getCSI_CursorMove Position 7 $(( 1 + (25 * 5) )) )"
+declare -r POS_SKIPPED_1="$(getCSI_CursorMove  Position 4 $(( 1 + (25 * 6) )) )"
+declare -r POS_SKIPPED_2="$(getCSI_CursorMove  Position 7 $(( 1 + (25 * 6) )) )"
+declare -r POS_ARCHIVED_1="$(getCSI_CursorMove Position 4 $(( 1 + (25 * 8) )) )"
+declare -r POS_ARCHIVED_2="$(getCSI_CursorMove Position 7 $(( 1 + (25 * 8) )) )"
+declare -r POS_CHECKED_1="$(getCSI_CursorMove  Position 4 $(( 1 + (25 * 9) )) )"
+declare -r POS_CHECKED_2="$(getCSI_CursorMove  Position 7 $(( 1 + (25 * 9) )) )"
+
+################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Variables Definition                                                                                                                                  ##
+##                                                                                                                                                            ##
+################################################################################################################################################################
+
+declare hostBackuped='INITIALIZATION'
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
-# cp -rfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Day-1/home
+declare posFilename=''
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+# cp -vrfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Day-1/home
 # echo "Day-1 OK"
-# cp -rfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Day-3/home
+# cp -vrfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Day-3/home
 # echo "Day-3 OK"
-# cp -rfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Day-5/home
+# cp -vrfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Day-5/home
 # echo "Day-5 OK"
-# cp -rfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Day-6/home
+# cp -vrfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Day-6/home
 # echo "Day-6 OK"
-# cp -rfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Day-7/home
+# cp -vrfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Day-7/home
 # echo "Day-7 OK"
-# cp -rfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Week-4/home
+# cp -vrfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Week-4/home
 # echo "Week-4 OK"
-# cp -rfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Month-11/home
+# cp -vrfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Month-11/home
 # echo "Month-11 OK"
-# cp -rfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Month-12/home
+# cp -vrfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Month-12/home
 # echo "Month-12 OK"
-# cp -rfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Year-3/home
+# cp -vrfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Year-3/home
 # echo "Year-3 OK"
-# cp -rfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Year-5/home
+# cp -vrfP --preserve=mode,ownership,timestamps,links --remove-destination /root/BackupFolder/TEST/Router/Current/home /root/BackupFolder/TEST/Router/Year-5/home
 # echo "Year-5 OK"
 #
 # safeExit
@@ -1309,17 +1350,24 @@ hostBackuped='INITIALIZATION'
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
 
-
-################################################################################
-##      Initialize bases fonlders                                             ##
-################################################################################
+################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Create Bases Folders                                                                                                                                  ##
+##                                                                                                                                                            ##
+################################################################################################################################################################
 
 mkdir -p "$PATH_BACKUP_FOLDER"
 mkdir -p "$PATH_BACKUP_FOLDER/$STATUS_FOLDER"
 
+mkdir -p "$PATH_STATIC_WORKING_DIRECTORY"
+
 for hostFolder in $hostBackuped ${HOSTS_LIST[@]}; do
+	mkdir -p "$PATH_STATIC_WORKING_DIRECTORY/$hostFolder"
+	mkdir -p "$PATH_STATIC_WORKING_DIRECTORY/$hostFolder/$VARIABLES_FOLDER"
+
 	mkdir -p "$PATH_TMP/$hostFolder"
 	mkdir -p "$PATH_TMP/$hostFolder/$VARIABLES_FOLDER"
+
 	mkdir -p "$PATH_TMP/MEMORY/$hostFolder"
 done
 
@@ -1331,22 +1379,44 @@ for hostFolder in ${HOSTS_LIST[@]}; do
 	done
 done
 
+unset hostFolder periodFolder
+
+declare pathHWDD="$PATH_TMP/$hostBackuped"
+declare pathHWDR="$PATH_TMP/MEMORY/$hostBackuped"
+declare pathHWDS="$PATH_STATIC_WORKING_DIRECTORY/$hostBackuped"
+
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
 # takeWorkingDirectory TODO
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
-# == unset later ==
-declare selected choice choice2
+################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Pre-Backup Initialization                                                                                                                             ##
+##                                                                                                                                                            ##
+################################################################################################################################################################
 
-echo
+# restore all previous section status
+
+declare -i canal
+declare    filename
+
+while IFS= read -u ${canal} filename; do
+	cp "$PATH_STATIC_WORKING_DIRECTORY/$filename" "$PATH_TMP/$filename"
+done {canal}< <(find "$PATH_STATIC_WORKING_DIRECTORY/" -type f -name 'section-*.txt' -printf '%P\n')
+
+unset canal filename
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+declare -i selected
 
 if checkSectionStatus 'Backup-Started'; then
 # 	rm --preserve-root -f "$PATH_TMP/brutal.mode"
 
 	(( BRUTAL > 0 )) && {
-		echo -e "${A_WARNING_NR} The backup is in ${S_NORED}BRUTAL MODE${S_NO}, this will take a VERY LONG time !!"
+		echo -e "\n${A_WARNING_NR} The backup is in ${S_NORED}BRUTAL MODE${S_NO}, this will take a VERY LONG time !!"
 		echo -ne "${A_TAG_LENGTH_SIZE} Do you want to continue anyway ? "; getWordUserChoiceV 'selected' 'Yes No'
 
 		case $selected in
@@ -1363,20 +1433,19 @@ if checkSectionStatus 'Backup-Started'; then
 		sleep 2
 	}
 
-	makeSectionStatusDone 'Backup-Started'
 else
-	choice='New Continue'
-	choice2=''
+	declare choice1='New Continue'
+	declare choice2=''
 
-	echo -e "${A_WARNING_NY} A backup is already ${S_NORED}IN PROGRESS${S_NO}, but has probably crashed..."
+	echo -e "\n${A_WARNING_NY} A backup is already ${S_NORED}IN PROGRESS${S_NO}, but has probably crashed..."
 
 	[[ ($BRUTAL == 1 && ! -f "$PATH_TMP/brutal.mode") || (-f "$PATH_TMP/brutal.mode" && $BRUTAL == 0) ]] && {
 		echo -e "${S_NORED}! you can't choose continue because the BRUTAL MODE was not the same in this backup...${S_NO}"
-		choice='New'
+		choice1='New'
 		choice2="${S_BA}${S_DA}${S_YEL}Continue${S_NO} "
 	}
 
-	echo -ne "${A_TAG_LENGTH_SIZE} Do you want to try to continue, or start a new one ? $choice2"; getWordUserChoiceV 'selected' $choice
+	echo -ne "${A_TAG_LENGTH_SIZE} Do you want to try to continue, or start a new one ? $choice2"; getWordUserChoiceV 'selected' $choice1
 
 	case $selected in
 		1)
@@ -1384,6 +1453,14 @@ else
 # 			for hostFolder in $hostBackuped ${HOSTS_LIST[@]}; do # TODO
 # 				rm -rf "$PATH_BACKUP_FOLDER/$STATUS_FOLDER/$hostFolder/"*
 # 			done
+
+			echo -e "\n${S_BORED}Removed files :${S_NOLRE}\n"
+
+			find "$PATH_TMP" -type f -name "section-*.txt" -print -delete
+			find "$PATH_STATIC_WORKING_DIRECTORY" -type f -print -delete
+
+			echo -e "${S_R_AL}"
+			sleep 3
 			;;
 		2)
 			echo -e "\r${A_OK}"
@@ -1391,69 +1468,72 @@ else
 	esac
 
 	sleep 2
+	unset choice1 choice2
 fi
 
-unset selected choice choice2
+unset selected
+
+makeSectionStatusDoneX 'Backup-Started'
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
 clear
 
-
-
-################################################################################
-##      Make rotation of archived files                                       ##
-################################################################################
-
-pathWorkingDirectory="$(getHostWorkingDirectory)"
-pathWorkingDirectoryRAM="$(getHostWorkingDirectory 1)"
+#MWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWM
+#WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW
+#MWM                                                                                                                                                        WMWM
+#WMW     Rotation of Archived Files                                                                                                                         MWMW
+#MWM                                                                                                                                                        WMWM
+#WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW
+#MWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWM
 
 if checkSectionStatus 'Rotation-Finished' $hostBackuped; then
 	updateScreenCurrentAction 'Rotation of the archived files'
 
-
-
-#==============================================================================#
-#==     Find who need to be rotated                                          ==#
-#==============================================================================#
+################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Find who need to be rotated                                                                                                                           ##
+##                                                                                                                                                            ##
+################################################################################################################################################################
 
 	if checkSectionStatus 'Rotation-Details' $hostBackuped; then
 		updateScreenCurrentAction 'Rotation of the archived files :' 'Check date'
 
-		# == keeped ==
-		declare -i isNewDay=0 isNewWeek=0 isNewMonth=0 isNewYear=0
-		declare -i isYesterday dayOfWeek rotationStatusSize
-
-		declare		backupLastDateText='This backup is the first one !'
-		declare		rotationStatus=''
-
-		# == unset later ==
-		declare		yesterday=''
-		declare -ai backupLastDate=( 0 0 0 0 0 ) backupCurrentDate backupLastSince
-
-# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+		declare     backupLastDateText='This backup is the first one !'
+		declare -ai backupLastDate=( 0 0 0 0 0 )
 
 		[[ -f "$PATHFILE_LAST_BACKUP_DATE" ]] && {
 			read -a backupLastDate < "$PATHFILE_LAST_BACKUP_DATE"
 
 # 			(( LastBackupSince = SCRIPT_START_TIME - backupLastDate[4], Days = LastBackupSince / 86400, Hours = (LastBackupSince % 86400) / 3600, Minutes = ((LastBackupSince % 86400) % 3600) / 60, 1 ))
-			backupLastSince=( $(TZ=UTC printf '%(%-j %-H %-M %-S)T' $(( SCRIPT_START_TIME - backupLastDate[0] )) ) )
+			declare -ai backupLastSince=( $(TZ=UTC printf '%(%-j %-H %-M %-S)T' $(( SCRIPT_START_TIME - backupLastDate[0] )) ) )
 			(( backupLastSince[0]-- ))
 
 # 			TODO : show day only if > 0 ?
 			# BUG : pad the time here...
 			backupLastDateText="The last backup was at $(cat "$PATHFILE_LAST_BACKUP_DATE.txt"), ${S_BOWHI}${backupLastSince[0]}${S_NOWHI}D ${S_BOWHI}${backupLastSince[1]}${S_NOWHI}H${S_BOWHI}${backupLastSince[2]}${S_NOWHI}:${S_BOWHI}${backupLastSince[3]}${S_NOWHI}${S_R_AL} ago"
+
+			unset backupLastSince
 		}
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
-		(( isYesterday = $(date '+%-H') <= 5 ? 1 : 0, isYesterday )) &&
+		declare -i isYesterday # rotationStatusSize
+		declare    yesterday=''
+
+		(( isYesterday = $(date '+%-H') <= 5 ? 1 : 0,
+
+		isYesterday )) &&
 			yesterday='-d yesterday'
 
-		backupCurrentDate=( $(date '+%s') $(date $yesterday '+%-j +%-V %-d %-m %-Y') )
-		dayOfWeek="$(date $yesterday '+%w')"
+		declare -ai backupCurrentDate=( $(date '+%s') $(date $yesterday '+%-j +%-V %-d %-m %-Y') )
+		declare -i  dayOfWeek="$(date $yesterday '+%w')"
+
+		unset yesterday
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+		declare -i isNewDay=0 isNewWeek=0 isNewMonth=0 isNewYear=0
 
 		((	isNewYear  = backupCurrentDate[5] > backupLastDate[5] ? 1 : 0,
 			isNewMonth = backupCurrentDate[4] > backupLastDate[4] ? 1 : 0 | isNewYear,
@@ -1462,70 +1542,78 @@ if checkSectionStatus 'Rotation-Finished' $hostBackuped; then
 			isNewWeek  = ((backupCurrentDate[2] > backupLastDate[2]) ||
 						  ((backupCurrentDate[2] == 1) && (backupLastDate[2] != 1))) ? 1 : 0	)) || :
 
-# 		{ # FOR DEBUG		####################################################################################################################################
-
-			isNewDay=1
-
-# 		}					####################################################################################################################################
-
-# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
-
-		(( isNewDay   == 1 )) && rotationStatus="${S_NOGRE}NEW-DAY"
-		(( isNewMonth == 1 )) && rotationStatus="${S_NOGRE}NEW-MONTH"
-		(( isNewYear  == 1 )) && rotationStatus="${S_NOGRE}NEW-YEAR"
-		(( isNewWeek  == 1 )) && rotationStatus+=" ${S_NOYEL}${S_B_RED} NEW-WEEK "
-		rotationStatus+="${S_R_AL}"
-
-		rotationStatusSize=$(getCSI_StringLength "$rotationStatus")
-
-# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
-
 		echo "${backupCurrentDate[*]}"   			>| "$PATHFILE_LAST_BACKUP_DATE"
 		echo "$(date '+%A %-d %B %Y @ %H:%M:%S')"	>| "$PATHFILE_LAST_BACKUP_DATE.txt"
 
-		declare -p isNewDay isNewWeek isNewMonth isNewYear isYesterday dayOfWeek backupLastDateText rotationStatus rotationStatusSize > "$pathWorkingDirectory/$VARIABLES_FOLDER/Rotation-Details.var"
+		unset backupCurrentDate backupLastDate
 
-		makeSectionStatusDone 'Rotation-Details' $hostBackuped
+#===============================================================================================================================================================
 
-		unset backupLastDate backupCurrentDate yesterday backupLastSince
+#		== FOR DEBUG ==
+		isNewDay=1
+
+#===============================================================================================================================================================
+
+		declare rotationStatus=''
+
+		(( isNewDay    == 1 )) && rotationStatus="${S_NOGRE}NEW-DAY"
+		(( isNewMonth  == 1 )) && rotationStatus="${S_NOGRE}NEW-MONTH"
+		(( isNewYear   == 1 )) && rotationStatus="${S_NOGRE}NEW-YEAR"
+		(( isYesterday == 1 )) && rotationStatus+="${S_NOGRE}${S_BL} <<"
+		(( isNewWeek   == 1 )) && rotationStatus+=" ${S_NOYEL}${S_B_RED} NEW-WEEK "
+		rotationStatus+="${S_R_AL}"
+
+# 		rotationStatusSize=$(getCSI_StringLength "$rotationStatus")
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+		declare -p	isNewDay isNewWeek isNewMonth isNewYear \
+					isYesterday dayOfWeek backupLastDateText \
+					rotationStatus > "$pathHWDS/$VARIABLES_FOLDER/Rotation-Details.var"		# rotationStatusSize
+
+		makeSectionStatusDoneX 'Rotation-Details' $hostBackuped
 	else
-		. "$pathWorkingDirectory/$VARIABLES_FOLDER/Rotation-Details.var"
+		[[ -f "$pathHWDS/$VARIABLES_FOLDER/Rotation-Details.var" ]] ||
+			errcho ':EXIT:' 'Something wrong here with a variables files...'
+
+		. "$pathHWDS/$VARIABLES_FOLDER/Rotation-Details.var"
 	fi
 
 	# pass this variables as constants...
 	declare -ir isNewDay isNewWeek isNewMonth isNewYear
-	declare -ir isYesterday dayOfWeek rotationStatusSize
+	declare -ir isYesterday dayOfWeek # rotationStatusSize
 	declare	-r	backupLastDateText rotationStatus
 
+	getCSI_CursorMove Position 2 1
+	echo -e "$backupLastDateText"
 
-	echo -e "$(getCSI_CursorMove Position 2 1)$backupLastDateText"
+################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Make the Rotation                                                                                                                                     ##
+##                                                                                                                                                            ##
+################################################################################################################################################################
 
-
-
-#==============================================================================#
-#==     Rotate all files that need it                                        ==#
-#==============================================================================#
-
-	declare -i count_size_trashed=0 count_files_trashed=0 count_size_rotation=0 count_files_rotation=0	# TODO : change name
-	declare -r PATHFILE_ROTATION_STATISTICS="$pathWorkingDirectory/$VARIABLES_FOLDER/Rotation-Statistics.var"
-
-	if [[ -f "$PATHFILE_ROTATION_STATISTICS" ]]; then	# TODO
-		. "$PATHFILE_ROTATION_STATISTICS"
-	else
-		echo -n '' > "$PATHFILE_ROTATION_STATISTICS"
-	fi
-
-# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+# 	declare -i count_size_trashed=0 count_files_trashed=0 count_size_rotation=0 count_files_rotation=0	# TODO : change name
+# 	declare -r PATHFILE_ROTATION_STATISTICS="$pathHWDD/$VARIABLES_FOLDER/Rotation-Statistics.var"
+#
+# 	if [[ -f "$PATHFILE_ROTATION_STATISTICS" ]]; then	# TODO
+# 		. "$PATHFILE_ROTATION_STATISTICS"
+# 	else
+# 		echo -n '' > "$PATHFILE_ROTATION_STATISTICS"
+# 	fi
 
 	declare -i lineIndex=4
 
 	showRotationTitle
 
 	rotateFolders
-
 	countFiles
 
-	updateScreenCurrentAction 'Rotation finished :' "${S_BL}${S_YEL}Press a key...${S_R_AL}"
+	unset lineIndex
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	updateScreenCurrentAction 'Rotation finished :' "${S_BL}${S_BOYEL}███ ███ ███ Press a key...${S_R_AL}"
 	read noKey
 
 # 	(( isNewYear == 1 )) && {
@@ -1566,90 +1654,37 @@ if checkSectionStatus 'Rotation-Finished' $hostBackuped; then
 # 		rotateFolder 'Day-1' 'Day-2'
 # 	}
 
-	makeSectionStatusDone 'Rotation-Finished' $hostBackuped
+	makeSectionStatusDoneX 'Rotation-Finished' $hostBackuped
 else
-	. "$pathWorkingDirectory/$VARIABLES_FOLDER/Rotation-Details.var" # TODO
+	[[ -f "$pathHWDS/$VARIABLES_FOLDER/Rotation-Details.var" ]] ||
+		errcho ':EXIT:' 'Something wrong here with a variables files...'
+
+	. "$pathHWDS/$VARIABLES_FOLDER/Rotation-Details.var"
+
+	# pass this variables as constants...
+	declare -ir isNewDay isNewWeek isNewMonth isNewYear
+	declare -ir isYesterday dayOfWeek # rotationStatusSize
+	declare	-r	backupLastDateText rotationStatus
 fi
 
+unset pathHWDD pathHWDR pathHWDS
 
+#MWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWM
+#WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW
+#MWM                                                                                                                                                        WMWM
+#WMW     Make the backup of all hosts (Main Loop)                                                                                                           MWMW
+#MWM                                                                                                                                                        WMWM
+#WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW
+#MWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWM
 
-################################################################################
-################################################################################
-####                                                                        ####
-####     Make the backup of all hosts                                       ####
-####                                                                        ####
-################################################################################
-################################################################################
-
-TYPE_FILE=1
-TYPE_FOLDER=2
-TYPE_SYMLINK=3
+################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Backup Initialization                                                                                                                                 ##
+##                                                                                                                                                            ##
+################################################################################################################################################################
 
 for hostBackuped in ${HOSTS_LIST[@]}; do
 	updateScreenCurrentAction 'Initialize remote filesystem...'
-
-	declare pathWorkingDirectory="$(getHostWorkingDirectory)"
-	declare pathWorkingDirectoryRAM="$(getHostWorkingDirectory 1)"
-
-	case $hostBackuped in
-		'BravoTower')
-			echo '	/bin
-					/etc
-					/usr
-					/var
-					/root
-					/home/foophoenix
-					/data
-					/media/foophoenix/AppKDE
-					/media/foophoenix/DataCenter
-				' > "$pathWorkingDirectory/Include.items"
-
-			echo '	/home/foophoenix/Data/Router/DataSierra
-					/home/foophoenix/Data/Router/Home-FooPhoenix
- 					/home/foophoenix/Data/Router/Root
-					/home/foophoenix/Data/BackupSystem/BackupFolder
-					/home/foophoenix/Data/BackupSystem/Root
-# 					/media/foophoenix/DataCenter/.Trash
-# 					/media/foophoenix/AppKDE/.Trash
-				' > "$pathWorkingDirectory/Exclude.items"
-			;;
-		'Router')
-			echo '	/bin
-					/etc
-					/usr
-					/var
-					/root
-					/home/foophoenix
-					/data
-				' > "$pathWorkingDirectory/Include.items"
-
-			echo '	/home/foophoenix/VirtualBox/BackupSystem/Snapshots
-# 					/home/foophoenix/tmp
-# 					/home/foophoenix/tmp/config-test-4
-# 					/media/foophoenix/DataCenter/.Trash
-# 					/media/foophoenix/AppKDE/.Trash
-				' > "$pathWorkingDirectory/Exclude.items"
-			;;
-		*)
-			errcho "Backup of '$hostBackuped' failed and skipped because no include/exclude configuration is made..."
-			continue
-			;;
-	esac
-
-	sed -i 's/^[[:blank:]]*//;/^[[:blank:]]*$/d;/^#/d' "$pathWorkingDirectory/Include.items"
-	sed -i 's/^[[:blank:]]*//;/^[[:blank:]]*$/d;/^#/d' "$pathWorkingDirectory/Exclude.items"
-
-	case $hostBackuped in
-		'BravoTower')
-			compress_details='-zz --compress-level=6 --skip-compress=rar'
-			;;
-		*)
-			compress_details=''	# --bwlimit=30M
-			;;
-	esac
-
-# 	echo
-# 	echo -e "${S_BOWHI}              Start to make the backup of $hostBackuped...${S_R_AL}"
 
 	# Check if the host is connected		TODO Do it before the main loop and launch to fill the cache on each host
 	[[ "$(ssh $hostBackuped "echo 'ok'")" != 'ok' ]] && {
@@ -1657,80 +1692,120 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		continue
 	}
 
+	declare pathHWDD="$PATH_TMP/$hostBackuped"
+	declare pathHWDR="$PATH_TMP/MEMORY/$hostBackuped"
+	declare pathHWDS="$PATH_STATIC_WORKING_DIRECTORY/$hostBackuped"
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	case $hostBackuped in
+		'BravoTower')	# ------------------------------------------------------------------
+			echo '
+				/bin
+				/etc
+				/usr
+				/var
+				/root
+				/home/foophoenix
+				/data
+				/media/foophoenix/AppKDE
+				/media/foophoenix/DataCenter
+					' > "$pathHWDR/Include.items"
+
+			echo '
+				/home/foophoenix/Data/Router/DataSierra
+				/home/foophoenix/Data/Router/Home-FooPhoenix
+				/home/foophoenix/Data/Router/Root
+				/home/foophoenix/Data/BackupSystem/BackupFolder
+				/home/foophoenix/Data/BackupSystem/Root
+# 				/media/foophoenix/DataCenter/.Trash
+# 				/media/foophoenix/AppKDE/.Trash
+					' > "$pathHWDR/Exclude.items"
+			;;
+		'Router')	# ----------------------------------------------------------------------
+			echo '
+				/bin
+				/etc
+				/usr
+				/var
+				/root
+				/home/foophoenix
+				/data
+					' > "$pathHWDR/Include.items"
+
+			echo '
+				/home/foophoenix/VirtualBox/BackupSystem/Snapshots
+# 				/home/foophoenix/tmp
+# 				/home/foophoenix/tmp/config-test-4
+# 				/media/foophoenix/DataCenter/.Trash
+# 				/media/foophoenix/AppKDE/.Trash
+					' > "$pathHWDR/Exclude.items"
+			;;
+		*)	# ------------------------------------------------------------------------------
+			errcho "Backup of '$hostBackuped' failed and skipped because no include/exclude configuration is made..."
+			continue
+			;;
+	esac
+
+	sed -i 's/^[[:blank:]]*//;/^[[:blank:]]*$/d;/^#/d' "$pathHWDR/Include.items"
+	sed -i 's/^[[:blank:]]*//;/^[[:blank:]]*$/d;/^#/d' "$pathHWDR/Exclude.items"
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	case $hostBackuped in
+		'BravoTower')
+			declare compressConfig='-zz --compress-level=6 --skip-compress=rar'
+			;;
+		*)
+			declare compressConfig=''	# --bwlimit=30M
+			;;
+	esac
+
+# 	echo
+# 	echo -e "${S_BOWHI}              Start to make the backup of $hostBackuped...${S_R_AL}"
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
 	mkdir -p "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped"
 	[[ "$(ls -A "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped")" == '' ]] &&
 		sshfs $hostBackuped:/ "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped" -o follow_symlinks -o ro -o cache=no -o ssh_command='ssh -c chacha20-poly1305@openssh.com -o Compression=no'
 
 # 		fusermount -u -z -q "$PATH_HOST_BACKUPED_FOLDER" &2> /dev/null
 # 		rmdir "$PATH_HOST_BACKUPED_FOLDER"
-		sync
-		sleep 1
+# 		sync
+# 		sleep 1
 
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
-
-################################################################################
-################################################################################
-####                                                                        ####
-####     STEP 1 : Build the files list                                      ####
-####                                                                        ####
-################################################################################
-################################################################################
-
-#==============================================================================#
-#==     Initialize some used variables                                       ==#
-#==============================================================================#
+	posFilename="$(getCSI_CursorMove Position 10 1 )"
 
 	getCSI_CursorMove Position 2 1
 	getCSI_ScreenMove Insert 8
 
-# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
-
-	echo -en "$(getCSI_CursorMove Position 3 1)"
+	getCSI_CursorMove Position 3 1
 	printf "${S_BOWHI}   %-22s${S_BOLRE}   %-22s${S_BORED}   %-22s${S_BOYEL}   %-22s${S_BOLBL}   %-22s${S_BOGRE}   %-22s${S_BOCYA}   %-22s${S_BOBLA}   %-22s${S_BOMAG}   %-22s${S_BOYEL}   %-22s${S_R_AL}\n" 'Total' 'Excluded' 'Removed' 'Updated' 'Added' 'Up to date' 'Skipped' '#' 'To archive' 'To check'
 
-	lineIndex=4
+	echoStat 0 0 "$POS_TOTAL_1" "$S_NOWHI"
+	echoStat 0 0 "$POS_EXCUDED_1" "$S_NOLRE"
+	echoStat 0 0 "$POS_REMOVED_1" "$S_NORED"
+	echoStat 0 0 "$POS_UPDATED_1" "$S_NOYEL"
+	echoStat 0 0 "$POS_ADDED_1" "$S_NOLBL"
+	echoStat 0 0 "$POS_UPTODATE_1" "$S_NOGRE"
+	echoStat 0 0 "$POS_SKIPPED_1" "$S_NOCYA"
+	echoStat 0 0 "$POS_ARCHIVED_1" "$S_NOMAG"
+	echoStat 0 0 "$POS_CHECKED_1" "$S_NOYEL"
 
-	declare posTotal1="$(getCSI_CursorMove Position    $(( lineIndex + 0 )) $(( 1 + (25 * 0) )))"
-	declare posTotal2="$(getCSI_CursorMove Position    $(( lineIndex + 3 )) $(( 1 + (25 * 0) )))"
-	echoStat 0 0 "$posTotal1" "$S_NOWHI"
-
-	declare posExcuded1="$(getCSI_CursorMove Position  $(( lineIndex + 0 )) $(( 1 + (25 * 1) )))"
-	declare posExcuded2="$(getCSI_CursorMove Position  $(( lineIndex + 3 )) $(( 1 + (25 * 1) )))"
-	echoStat 0 0 "$posExcuded1" "$S_NOLRE"
-
-	declare posRemoved1="$(getCSI_CursorMove Position  $(( lineIndex + 0 )) $(( 1 + (25 * 2) )))"
-	declare posRemoved2="$(getCSI_CursorMove Position  $(( lineIndex + 3 )) $(( 1 + (25 * 2) )))"
-	echoStat 0 0 "$posRemoved1" "$S_NORED"
-
-	declare posUpdated1="$(getCSI_CursorMove Position  $(( lineIndex + 0 )) $(( 1 + (25 * 3) )))"
-	declare posUpdated2="$(getCSI_CursorMove Position  $(( lineIndex + 3 )) $(( 1 + (25 * 3) )))"
-	echoStat 0 0 "$posUpdated1" "$S_NOYEL"
-
-	declare posAdded1="$(getCSI_CursorMove Position    $(( lineIndex + 0 )) $(( 1 + (25 * 4) )))"
-	declare posAdded2="$(getCSI_CursorMove Position    $(( lineIndex + 3 )) $(( 1 + (25 * 4) )))"
-	echoStat 0 0 "$posAdded1" "$S_NOLBL"
-
-	declare posUptodate1="$(getCSI_CursorMove Position $(( lineIndex + 0 )) $(( 1 + (25 * 5) )))"
-	declare posUptodate2="$(getCSI_CursorMove Position $(( lineIndex + 3 )) $(( 1 + (25 * 5) )))"
-	echoStat 0 0 "$posUptodate1" "$S_NOGRE"
-
-	declare posSkipped1="$(getCSI_CursorMove Position  $(( lineIndex + 0 )) $(( 1 + (25 * 6) )))"
-	declare posSkipped2="$(getCSI_CursorMove Position  $(( lineIndex + 3 )) $(( 1 + (25 * 6) )))"
-	echoStat 0 0 "$posSkipped1" "$S_NOCYA"
-
-	declare posArchived1="$(getCSI_CursorMove Position $(( lineIndex + 0 )) $(( 1 + (25 * 8) )))"
-	declare posArchived2="$(getCSI_CursorMove Position $(( lineIndex + 3 )) $(( 1 + (25 * 8) )))"
-	echoStat 0 0 "$posArchived1" "$S_NOMAG"
-
-	declare posChecked1="$(getCSI_CursorMove Position  $(( lineIndex + 0 )) $(( 1 + (25 * 9) )))"
-	declare posChecked2="$(getCSI_CursorMove Position  $(( lineIndex + 3 )) $(( 1 + (25 * 9) )))"
-	echoStat 0 0 "$posChecked1" "$S_NOYEL"
-
-	posFilename="$(getCSI_CursorMove Position $(( lineIndex + 6)) 1 )"
-
-# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Build the files list (Step 1)                                                                                                                         ##
+##                                                                                                                                                            ##
+################################################################################################################################################################
 
 	if checkSectionStatus 'Step_1' $hostBackuped; then
+
+#==============================================================================================================================================================#
+#       Make some initialization                                                                                                                               #
+#==============================================================================================================================================================#
+
 		updateScreenCurrentAction 'Make the lists of files...'
 
 		declare -i step1_CountFilesTotal=0		step1_CountSizeTotal=0
@@ -1755,22 +1830,22 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		openFilesListsSpliter 'canalExcluded' 'Excluded'
 		openFilesListsSpliter 'canalSkipped'  'Skipped'	# TODO : Add uptodate for brutal mode !
 
-		exec {canalUpdatedFolders}>"$pathWorkingDirectoryRAM/UpdatedFolders.files"
+		exec {canalUpdatedFolders}>"$pathHWDR/UpdatedFolders.files"
 
-		fileMaxSize='--max-size=150MB'
+		declare fileMaxSize='--max-size=150MB'
 		fileMaxSize='--max-size=500KB'
 		fileMaxSize='--max-size=50KB'
 
 		(( isNewWeek == 1 || BRUTAL == 1 )) &&	# TODO : and what about a "soft" brutal mode that don't cancel the size limitation ?
 			fileMaxSize=''
 
-		declare -i canalMain canalSkippedIn canalRemovedIn canalResolvedIn canalSkippedOut canalRemovedOut canalResolvedOut		# TODO : Verify all unset variables
-		declare    mainPipe="$pathWorkingDirectoryRAM/Main.pipe"
-		declare    skippedPipe="$pathWorkingDirectoryRAM/Skipped.fake.pipe"
-		declare    removedPipe="$pathWorkingDirectoryRAM/Removed.fake.pipe"
-		declare    resolvedPipe="$pathWorkingDirectoryRAM/Resolved.fake.pipe"
+		declare -i canalMain canalSkippedIn canalRemovedIn canalResolvedIn canalSkippedOut canalRemovedOut canalResolvedOut
+		declare    mainPipe="$pathHWDR/Main.pipe"
+		declare    skippedPipe="$pathHWDR/Skipped.fake.pipe"
+		declare    removedPipe="$pathHWDR/Removed.fake.pipe"
+		declare    resolvedPipe="$pathHWDR/Resolved.fake.pipe"
 
-		rm -f  "$mainPipe"
+# 		rm -f  "$mainPipe"
 		mkfifo "$mainPipe"	# TODO : think about scriptPostRemoveFiles for all file in this script...
 
 # 		echo -n '' >| "$skippedPipe"
@@ -1786,15 +1861,17 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		exec {canalResolvedIn}<"$resolvedPipe"
 
 		declare -i skipOutput=0 refreshOutput=1
+		declare -i currentTime=0 lastTime=0
 
+		declare fileData filename fileType fileAction actionFlags
+		declare fileSize	# TODO Need to become -i
 
-
-#==============================================================================#
-#==     Build the files list                                                 ==#
-#==============================================================================#
+#==============================================================================================================================================================#
+#       Build the files list                                                                                                                                   #
+#==============================================================================================================================================================#
 
 		{
-			rsync -vvirtpoglDmn --files-from="$pathWorkingDirectory/Include.items" --exclude-from="$pathWorkingDirectory/Exclude.items" $fileMaxSize --delete-during --delete-excluded -M--munge-links --modify-window=5 --info=name2,backup,del,copy --out-format="> %12l %i %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/"
+			rsync -vvirtpoglDmn --files-from="$pathHWDR/Include.items" --exclude-from="$pathHWDR/Exclude.items" $fileMaxSize --delete-during --delete-excluded -M--munge-links --modify-window=5 --info=name2,backup,del,copy --out-format="> %12l %i %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/"
 			echo "$LOOP_END_TAG"
 		} >&${canalMain} &
 
@@ -1802,11 +1879,11 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 			pipeReceivedEnd=0
 			pipeExpectedEnd=2
 
-			while IFS= read -u ${canalResolvedIn} file_data || checkLoopFail; do
-				[[ -z "$file_data" ]] && continue
-				checkLoopEnd "$file_data" || { (( $? == 1 )) && break || continue; }
+			while IFS= read -u ${canalResolvedIn} fileData || checkLoopFail; do
+				[[ -z "$fileData" ]] && continue
+				checkLoopEnd "$fileData" || { (( $? == 1 )) && break || continue; }
 
-				echo "$file_data" >&${canalMain}
+				echo "$fileData" >&${canalMain}
 			done
 			echo "$LOOP_END_TAG" >&${canalMain}
 		} &
@@ -1819,15 +1896,16 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 				[[ -z "$filename" ]] && continue
 				checkLoopEnd "$filename" || { (( $? == 1 )) && break || continue; }
 
-				file_size="$(stat -c "%12s" "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped/${filename}")"
+				fileSize="$(stat -c "%12s" "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped/${filename}")"
 
-				echo "> $file_size sf--------- ${filename}" >&${canalResolvedOut}
+				echo "> $fileSize sf--------- ${filename}" >&${canalResolvedOut}
 			done
 			echo "$LOOP_END_TAG" >&${canalResolvedOut}
 		} &
 
 		{	# Removed IN
-			excludedFilesList="$pathWorkingDirectory/Exclude.items"
+			declare excludedFilesList="$pathHWDR/Exclude.items"
+			declare removeStatus
 
 			pipeReceivedEnd=0
 			pipeExpectedEnd=1
@@ -1836,27 +1914,28 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 				[[ -z "$filename" ]] && continue
 				checkLoopEnd "$filename" || { (( $? == 1 )) && break || continue; }
 
-				getIsExcludedV 'status' "/$filename" "$excludedFilesList"
-				file_type="$(stat -c "%F" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/${filename}")"
-				file_size="$(stat -c "%12s" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/${filename}")"
+				getIsExcludedV removeStatus "/$filename" "$excludedFilesList"
+				fileType="$(stat -c "%F" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/${filename}")"
+				fileSize="$(stat -c "%12s" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/${filename}")"
 
-				case "$file_type" in
-					'regular file'|'regular empty file')
-						file_type='f' ;;
+				case "$fileType" in
+					'regular file'|'regular empty file'|'fifo')
+						fileType='f' ;;
 					'directory')
-						file_type='d' ;;
+						fileType='d' ;;
 					'symbolic link')
-						file_type='L' ;;
+						fileType='L' ;;
 					*)
-						errcho ':EXIT:' "Type inconnu !! ($file_type)"
+						errcho ':EXIT:' "Type inconnu !! ($fileType)"
 						;;
 				esac
-				echo "> $file_size ${status}${file_type}--------- ${filename}" >&${canalResolvedOut}
+				echo "> $fileSize ${removeStatus}${fileType}--------- ${filename}" >&${canalResolvedOut}
 			done
 			echo ':END:' >&${canalResolvedOut}
+
+			unset excludedFilesList removeStatus
 		} &
 
-		declare -i currentTime=0 lastTime=0
 
 # 		lastAction=0
 # 		countProgress=0
@@ -1864,10 +1943,9 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		pipeReceivedEnd=0
 		pipeExpectedEnd=2
 
-	time {
-		while IFS= read -u ${canalMain} file_data || checkLoopFail; do
-			[[ -z "$file_data" ]] && continue
-			checkLoopEnd "$file_data" || {
+		while IFS= read -u ${canalMain} fileData || checkLoopFail; do
+			[[ -z "$fileData" ]] && continue
+			checkLoopEnd "$fileData" || {
 				(( $? == 1 )) && break
 
 				echo "$LOOP_END_TAG" >&${canalSkippedOut}
@@ -1876,38 +1954,38 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 				continue
 			}
 
-			if [[ "${file_data:0:1}" != '>' ]]; then
-				if [[ "${#file_data}" -le 17 ]]; then
+			if [[ "${fileData:0:1}" != '>' ]]; then
+				if [[ "${#fileData}" -le 17 ]]; then
 					continue
 				fi
 
-				if [[ "${file_data:(-17)}" != ' is over max-size' ]]; then
+				if [[ "${fileData:(-17)}" != ' is over max-size' ]]; then
 					continue
 				fi
 
 				# Here we have a skipped file
-				echo "${file_data:0:$(( ${#file_data} - 17 ))}" >&${canalSkippedOut}
+				echo "${fileData:0:$(( ${#fileData} - 17 ))}" >&${canalSkippedOut}
 				continue
 			fi
 
-			filename="${file_data:27}"
-			fileAction="${file_data:15:1}"
+			filename="${fileData:27}"
+			fileAction="${fileData:15:1}"
 
 			if [[ "$fileAction" == '*' ]]; then
 				echo "$filename" >&${canalRemovedOut}
 				continue
 			fi
 
-			file_size="${file_data:2:12}"
-			file_type="${file_data:16:1}"
+			fileSize="${fileData:2:12}"
+			fileType="${fileData:16:1}"
 
-			case "$file_type" in
+			case "$fileType" in
 				'f'|'S')
-					file_type=$TYPE_FILE
+					fileType=$TYPE_FILE
 					;;
 				'd')
 					[[ "$fileAction" == '.' ]] && {
-						actionFlags="${file_data:17:9}"
+						actionFlags="${fileData:17:9}"
 						[[ "$actionFlags" != '         ' ]] &&
 							echo "$filename" >&${canalUpdatedFolders}
 					}
@@ -1915,116 +1993,116 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					continue
 					;;
 				'L')
-					file_type=$TYPE_SYMLINK
+					fileType=$TYPE_SYMLINK
 					;;
 				*)
-					echo "$file_data"
-					errcho ':EXIT:' "Type inconnu !! ($file_type)"
+					echo "$fileData"
+					errcho ':EXIT:' "Type inconnu !! ($fileType)"
 					;;
 			esac
 
-# 			(( file_type != TYPE_FOLDER )) && {
-				((	step1_CountSizeTotal += file_size,
+# 			(( fileType != TYPE_FOLDER )) && {
+				((	step1_CountSizeTotal += fileSize,
 					++step1_CountFilesTotal,
 
 				refreshOutput )) &&
-					echoStat $step1_CountFilesTotal $step1_CountSizeTotal "$posTotal1" "$S_NOWHI"
+					echoStat $step1_CountFilesTotal $step1_CountSizeTotal "$POS_TOTAL_1" "$S_NOWHI"
 # 			}
 
 			case $fileAction in
 			'.')
-				actionFlags="${file_data:17:9}"
+				actionFlags="${fileData:17:9}"
 				if [[ "$actionFlags" == '         ' ]]; then
-# 					if (( file_type != TYPE_FOLDER )); then
-						((	step1_CountSizeUptodate += file_size,
+# 					if (( fileType != TYPE_FOLDER )); then
+						((	step1_CountSizeUptodate += fileSize,
 							++step1_CountFilesUptodate,
 
 						refreshOutput )) && {
-							echoStat $step1_CountFilesUptodate $(( step1_CountSizeUptodate + step1_CountSizeUpdated2 )) "$posUptodate1" "$S_NOGRE"
-							echoFilename "/$filename" $file_size "$A_UP_TO_DATE_G" "$S_NOGRE"
+							echoStat $step1_CountFilesUptodate $(( step1_CountSizeUptodate + step1_CountSizeUpdated2 )) "$POS_UPTODATE_1" "$S_NOGRE"
+							echoFilename "/$filename" $fileSize "$A_UP_TO_DATE_G" "$S_NOGRE"
 						}
 # 					fi
 				else
-					getUpdateFlagsV 'action__flags' "$actionFlags"
+					getUpdateFlagsV 'action__flags' "$actionFlags" # TODO Rename actionFlags to fileFlags
 
-# 					if (( file_type != TYPE_FOLDER )); then
-						((	step1_CountSizeUpdated2 += file_size,
+# 					if (( fileType != TYPE_FOLDER )); then
+						((	step1_CountSizeUpdated2 += fileSize,
 							++step1_CountFilesUpdated2,
 
 						refreshOutput )) && {
-							echoStat $(( step1_CountFilesUpdated1 + step1_CountFilesUpdated2 )) $step1_CountSizeUpdated1 "$posUpdated1" "$S_NOYEL"
-							echoFilename "/$filename" $file_size "$A_UPDATED_Y" "$S_NOYEL"
+							echoStat $(( step1_CountFilesUpdated1 + step1_CountFilesUpdated2 )) $step1_CountSizeUpdated1 "$POS_UPDATED_1" "$S_NOYEL"
+							echoFilename "/$filename" $fileSize "$A_UPDATED_Y" "$S_NOYEL"
 						}
 # 					fi
-					echo "$file_size $filename" >&${canalUpdate2}
+					echo "$fileSize $filename" >&${canalUpdate2}
 				fi
 				;;
 			's')
-				((	step1_CountSizeSkipped += file_size,
+				((	step1_CountSizeSkipped += fileSize,
 					++step1_CountFilesSkipped,
 
 				refreshOutput )) && {
-					echoStat $step1_CountFilesSkipped $step1_CountSizeSkipped "$posSkipped1" "$S_NOCYA"
-					echoFilename "/$filename" $file_size "$A_SKIPPED" "$S_NOCYA"
+					echoStat $step1_CountFilesSkipped $step1_CountSizeSkipped "$POS_SKIPPED_1" "$S_NOCYA"
+					echoFilename "/$filename" $fileSize "$A_SKIPPED" "$S_NOCYA"
 				}
 
-				echo "$file_size $filename" >&${canalSkipped}
+				echo "$fileSize $filename" >&${canalSkipped}
 				;;
 			'r')
-# 				if (( file_type != TYPE_FOLDER )); then
-					((	step1_CountSizeRemoved += file_size,
+# 				if (( fileType != TYPE_FOLDER )); then
+					((	step1_CountSizeRemoved += fileSize,
 						++step1_CountFilesRemoved,
 
 					refreshOutput )) && {
-						echoStat $step1_CountFilesRemoved $step1_CountSizeRemoved "$posRemoved1" "$S_NORED"
-						echoStat $(( step1_CountFilesRemoved + step1_CountFilesUpdated1 )) $(( step1_CountSizeRemoved + step1_CountSizeUpdated1 )) "$posArchived1" "$S_NOMAG"
-						echoFilename "/$filename" $file_size "$A_REMOVED_R" "$S_NORED"
+						echoStat $step1_CountFilesRemoved $step1_CountSizeRemoved "$POS_REMOVED_1" "$S_NORED"
+						echoStat $(( step1_CountFilesRemoved + step1_CountFilesUpdated1 )) $(( step1_CountSizeRemoved + step1_CountSizeUpdated1 )) "$POS_ARCHIVED_1" "$S_NOMAG"
+						echoFilename "/$filename" $fileSize "$A_REMOVED_R" "$S_NORED"
 					}
 
-					echo "$file_size $filename" >&${canalRemoved}
+					echo "$fileSize $filename" >&${canalRemoved}
 # 				fi
 				;;
 			'e')
-# 				if (( file_type != TYPE_FOLDER )); then
-					((	step1_CountSizeExcluded += file_size,
+# 				if (( fileType != TYPE_FOLDER )); then
+					((	step1_CountSizeExcluded += fileSize,
 						++step1_CountFilesExcluded,
 
 					refreshOutput )) && {
-						echoStat $step1_CountFilesExcluded $step1_CountSizeExcluded "$posExcuded1" "$S_NOLRE"
-						echoFilename "/$filename" $file_size "$A_EXCLUDED_R" "$S_NOLRE"
+						echoStat $step1_CountFilesExcluded $step1_CountSizeExcluded "$POS_EXCUDED_1" "$S_NOLRE"
+						echoFilename "/$filename" $fileSize "$A_EXCLUDED_R" "$S_NOLRE"
 					}
 
-					echo "$file_size $filename" >&${canalExcluded}
+					echo "$fileSize $filename" >&${canalExcluded}
 # 				fi
 				;;
 			*)
-				actionFlags="${file_data:17:9}"
+				actionFlags="${fileData:17:9}"
 
 				if [[ "$actionFlags" == '+++++++++' ]]; then
-# 					if (( file_type != TYPE_FOLDER )); then
-						((	step1_CountSizeAdded += file_size,
+# 					if (( fileType != TYPE_FOLDER )); then
+						((	step1_CountSizeAdded += fileSize,
 							++step1_CountFilesAdded,
 
 						refreshOutput )) && {
-							echoStat $step1_CountFilesAdded $step1_CountSizeAdded "$posAdded1" "$S_NOLBL"
-							echoFilename "/$filename" $file_size "$A_ADDED_B" "$S_NOLBL"
+							echoStat $step1_CountFilesAdded $step1_CountSizeAdded "$POS_ADDED_1" "$S_NOLBL"
+							echoFilename "/$filename" $fileSize "$A_ADDED_B" "$S_NOLBL"
 						}
 
-						echo "$file_size $filename" >&${canalAdded}
+						echo "$fileSize $filename" >&${canalAdded}
 # 					fi
 				else
 					getUpdateFlagsV 'action__flags' "$actionFlags"
 
-					((	step1_CountSizeUpdated1 += file_size,
+					((	step1_CountSizeUpdated1 += fileSize,
 						++step1_CountFilesUpdated1,
 
 					refreshOutput )) && {
-						echoStat $(( step1_CountFilesUpdated1 + step1_CountFilesUpdated2 )) $step1_CountSizeUpdated1 "$posUpdated1" "$S_NOYEL"
-						echoStat $(( step1_CountFilesRemoved + step1_CountFilesUpdated1 )) $(( step1_CountSizeRemoved + step1_CountSizeUpdated1 )) "$posArchived1" "$S_NOMAG"
-						echoFilename "/$filename" $file_size "$A_UPDATED_Y" "$S_NOYEL"
+						echoStat $(( step1_CountFilesUpdated1 + step1_CountFilesUpdated2 )) $step1_CountSizeUpdated1 "$POS_UPDATED_1" "$S_NOYEL"
+						echoStat $(( step1_CountFilesRemoved + step1_CountFilesUpdated1 )) $(( step1_CountSizeRemoved + step1_CountSizeUpdated1 )) "$POS_ARCHIVED_1" "$S_NOMAG"
+						echoFilename "/$filename" $fileSize "$A_UPDATED_Y" "$S_NOYEL"
 					}
 
-					echo "$file_size $filename" >&${canalUpdate1}
+					echo "$fileSize $filename" >&${canalUpdate1}
 				fi
 				;;
 			esac
@@ -2039,29 +2117,35 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 				(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 "${A_EMPTY_TAG}" '')") ))
 
-				echoStat $step1_CountFilesTotal $step1_CountSizeTotal "$posTotal1" "$S_NOWHI"
-				echoStat $step1_CountFilesExcluded $step1_CountSizeExcluded "$posExcuded1" "$S_NOLRE"
-				echoStat $step1_CountFilesRemoved $step1_CountSizeRemoved "$posRemoved1" "$S_NORED"
-				echoStat $step1_CountFilesAdded $step1_CountSizeAdded "$posAdded1" "$S_NOLBL"
-				echoStat $(( step1_CountFilesUpdated1 + step1_CountFilesUpdated2 )) $step1_CountSizeUpdated1 "$posUpdated1" "$S_NOYEL"
-				echoStat $step1_CountFilesUptodate $(( step1_CountSizeUptodate + step1_CountSizeUpdated2 )) "$posUptodate1" "$S_NOGRE"
-				echoStat $step1_CountFilesSkipped $step1_CountSizeSkipped "$posSkipped1" "$S_NOCYA"
-				echoStat $(( step1_CountFilesRemoved + step1_CountFilesUpdated1 )) $(( step1_CountSizeRemoved + step1_CountSizeUpdated1 )) "$posArchived1" "$S_NOMAG"
+				echoStat $step1_CountFilesTotal $step1_CountSizeTotal "$POS_TOTAL_1" "$S_NOWHI"
+				echoStat $step1_CountFilesExcluded $step1_CountSizeExcluded "$POS_EXCUDED_1" "$S_NOLRE"
+				echoStat $step1_CountFilesRemoved $step1_CountSizeRemoved "$POS_REMOVED_1" "$S_NORED"
+				echoStat $step1_CountFilesAdded $step1_CountSizeAdded "$POS_ADDED_1" "$S_NOLBL"
+				echoStat $(( step1_CountFilesUpdated1 + step1_CountFilesUpdated2 )) $step1_CountSizeUpdated1 "$POS_UPDATED_1" "$S_NOYEL"
+				echoStat $step1_CountFilesUptodate $(( step1_CountSizeUptodate + step1_CountSizeUpdated2 )) "$POS_UPTODATE_1" "$S_NOGRE"
+				echoStat $step1_CountFilesSkipped $step1_CountSizeSkipped "$POS_SKIPPED_1" "$S_NOCYA"
+				echoStat $(( step1_CountFilesRemoved + step1_CountFilesUpdated1 )) $(( step1_CountSizeRemoved + step1_CountSizeUpdated1 )) "$POS_ARCHIVED_1" "$S_NOMAG"
 			}
 
 
 
 		done
-	}
 
-		echoStat $step1_CountFilesTotal $step1_CountSizeTotal "$posTotal1" "$S_NOWHI"
-		echoStat $step1_CountFilesExcluded $step1_CountSizeExcluded "$posExcuded1" "$S_NOLRE"
-		echoStat $step1_CountFilesRemoved $step1_CountSizeRemoved "$posRemoved1" "$S_NORED"
-		echoStat $step1_CountFilesAdded $step1_CountSizeAdded "$posAdded1" "$S_NOLBL"
-		echoStat $(( step1_CountFilesUpdated1 + step1_CountFilesUpdated2 )) $step1_CountSizeUpdated1 "$posUpdated1" "$S_NOYEL"
-		echoStat $step1_CountFilesUptodate $(( step1_CountSizeUptodate + step1_CountSizeUpdated2 )) "$posUptodate1" "$S_NOGRE"
-		echoStat $step1_CountFilesSkipped $step1_CountSizeSkipped "$posSkipped1" "$S_NOCYA"
-		echoStat $(( step1_CountFilesRemoved + step1_CountFilesUpdated1 )) $(( step1_CountSizeRemoved + step1_CountSizeUpdated1 )) "$posArchived1" "$S_NOMAG"
+#==============================================================================================================================================================#
+#       Finalize the step 1                                                                                                                                    #
+#==============================================================================================================================================================#
+
+		unset skipOutput refreshOutput currentTime lastTime fileMaxSize
+		unset fileData filename fileType fileAction actionFlags fileSize
+
+		echoStat $step1_CountFilesTotal $step1_CountSizeTotal "$POS_TOTAL_1" "$S_NOWHI"
+		echoStat $step1_CountFilesExcluded $step1_CountSizeExcluded "$POS_EXCUDED_1" "$S_NOLRE"
+		echoStat $step1_CountFilesRemoved $step1_CountSizeRemoved "$POS_REMOVED_1" "$S_NORED"
+		echoStat $step1_CountFilesAdded $step1_CountSizeAdded "$POS_ADDED_1" "$S_NOLBL"
+		echoStat $(( step1_CountFilesUpdated1 + step1_CountFilesUpdated2 )) $step1_CountSizeUpdated1 "$POS_UPDATED_1" "$S_NOYEL"
+		echoStat $step1_CountFilesUptodate $(( step1_CountSizeUptodate + step1_CountSizeUpdated2 )) "$POS_UPTODATE_1" "$S_NOGRE"
+		echoStat $step1_CountFilesSkipped $step1_CountSizeSkipped "$POS_SKIPPED_1" "$S_NOCYA"
+		echoStat $(( step1_CountFilesRemoved + step1_CountFilesUpdated1 )) $(( step1_CountSizeRemoved + step1_CountSizeUpdated1 )) "$POS_ARCHIVED_1" "$S_NOMAG"
 
 		exec {canalMain}>&-
 		exec {canalSkippedOut}>&-
@@ -2089,21 +2173,34 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		closeFilesListsSpliter "Excluded" $canalExcluded
 		closeFilesListsSpliter "Skipped" $canalSkipped
 
-		mv "$pathWorkingDirectoryRAM/UpdatedFolders.files" "$pathWorkingDirectory/UpdatedFolders.files"
+		mv "$pathHWDR/UpdatedFolders.files" "$pathHWDD/UpdatedFolders.files"
 
 # 		for canal in {1..9}; do
 # 			output_file_name="$(getBackupFileName "Skipped-${index}" "$CAT_FILESLIST" 1)"
 # 			rm -f "$output_file_name"
 # 		done
 
-		declare -p step1_CountFilesTotal step1_CountSizeTotal step1_CountFilesAdded	step1_CountSizeAdded step1_CountFilesUpdated1 step1_CountSizeUpdated1 step1_CountFilesUpdated2 step1_CountSizeUpdated2 step1_CountFilesRemoved step1_CountSizeRemoved step1_CountFilesExcluded step1_CountSizeExcluded step1_CountFilesUptodate step1_CountSizeUptodate step1_CountFilesSkipped step1_CountSizeSkipped >| "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_1.var"
+		declare -p	step1_CountFilesTotal step1_CountSizeTotal step1_CountFilesAdded	step1_CountSizeAdded \
+					step1_CountFilesUpdated1 step1_CountSizeUpdated1 step1_CountFilesUpdated2 step1_CountSizeUpdated2 \
+					step1_CountFilesRemoved step1_CountSizeRemoved step1_CountFilesExcluded step1_CountSizeExcluded \
+					step1_CountFilesUptodate step1_CountSizeUptodate step1_CountFilesSkipped step1_CountSizeSkipped >| "$pathHWDS/$VARIABLES_FOLDER/Step_1.var"
 
-		makeSectionStatusDone 'Step_1' $hostBackuped
+		unset canalAdded canalUpdate1 canalUpdate2 canalRemoved canalExcluded canalSkipped canalUpdatedFolders
+		unset canalMain canalSkippedIn canalRemovedIn canalResolvedIn canalSkippedOut canalRemovedOut canalResolvedOut
+
+		makeSectionStatusDoneX 'Step_1' $hostBackuped
 	else
-		. "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_1.var"
+		[[ -f "$pathHWDS/$VARIABLES_FOLDER/Step_1.var" ]] ||
+			errcho ':EXIT:' 'Something wrong here with a variables files...'
+
+		. "$pathHWDS/$VARIABLES_FOLDER/Step_1.var"
 	fi
 
-# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Preparing the next steps                                                                                                                              ##
+##                                                                                                                                                            ##
+################################################################################################################################################################
 
 	declare -i stepA_P_CountFilesTotal=0	stepA_R_CountFilesTotal=$step1_CountFilesTotal
 	declare -i stepA_P_CountSizeTotal=0		stepA_R_CountSizeTotal=$step1_CountSizeTotal
@@ -2117,8 +2214,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 	getPercentageV stepA_P_PercentFilesTotal $stepA_P_CountFilesTotal $step1_CountFilesTotal
 	getPercentageV stepA_P_PercentSizeTotal  $stepA_P_CountSizeTotal  $step1_CountSizeTotal
 
-	echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$posTotal1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
-	echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$posTotal2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
+	echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$POS_TOTAL_1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
+	echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$POS_TOTAL_2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
 
 	declare -i stepA_P_CountFilesChecked=0	stepA_R_CountFilesChecked=0	stepA_T_CountFilesChecked=0
 	declare -i stepA_P_CountSizeChecked=0	stepA_R_CountSizeChecked=0	stepA_T_CountSizeChecked=0
@@ -2126,24 +2223,23 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 	declare    stepA_P_PercentFilesChecked	stepA_R_PercentFilesChecked
 	declare    stepA_P_PercentSizeChecked	stepA_R_PercentSizeChecked
 
-	echoStat $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$posChecked1" "$S_NOYEL"
-	echoStat $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$posChecked2" "$S_NOYEL"
+	echoStat $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$POS_CHECKED_1" "$S_NOYEL"
+	echoStat $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$POS_CHECKED_2" "$S_NOYEL"
 
-# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
-
-
-
-################################################################################
-################################################################################
-####                                                                        ####
-####     STEP 2 : Puts all excluded files into Trash                        ####
-####                                                                        ####
-################################################################################
-################################################################################
-
-	echo -en "$(getCSI_CursorMove Position 7 1)$(getCSI_ScreenMove Insert 4)"
+################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Puts all excluded files into Trash (Step 2)                                                                                                           ##
+##                                                                                                                                                            ##
+################################################################################################################################################################
 
 	if checkSectionStatus 'Step_2' $hostBackuped; then
+
+#==============================================================================================================================================================#
+#       Make some initialization                                                                                                                               #
+#==============================================================================================================================================================#
+
+# 	echo -en "$(getCSI_CursorMove Position 7 1)$(getCSI_ScreenMove Insert 4)"
+
 		updateScreenCurrentAction 'Remove all excluded files...'
 
 # 		step_2_progress1=''
@@ -2161,19 +2257,23 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		getPercentageV step2_P_PercentFilesExcluded $step2_P_CountFilesExcluded $step1_CountFilesExcluded
 		getPercentageV step2_P_PercentSizeExcluded  $step2_P_CountSizeExcluded  $step1_CountSizeExcluded
 
-		echoStatPercent $step2_R_CountFilesExcluded $step2_R_CountSizeExcluded "$posExcuded1" "$S_NOLRE" "$step2_R_PercentFilesExcluded" "$step2_R_PercentSizeExcluded"
-		echoStatPercent $step2_P_CountFilesExcluded $step2_P_CountSizeExcluded "$posExcuded2" "$S_NOLRE" "$step2_P_PercentFilesExcluded" "$step2_P_PercentSizeExcluded"
+		echoStatPercent $step2_R_CountFilesExcluded $step2_R_CountSizeExcluded "$POS_EXCUDED_1" "$S_NOLRE" "$step2_R_PercentFilesExcluded" "$step2_R_PercentSizeExcluded"
+		echoStatPercent $step2_P_CountFilesExcluded $step2_P_CountSizeExcluded "$POS_EXCUDED_2" "$S_NOLRE" "$step2_P_PercentFilesExcluded" "$step2_P_PercentSizeExcluded"
 
 # 		progress_current_item_1_processed=0
 # 		progress_current_size_1_processed=0
 
 # 		lineIndex=7
 
-# 		declare posExcuded2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 1) )))"
+# 		declare POS_EXCUDED_2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 1) )))"
 # 		posFilename="$(getCSI_CursorMove Position $(( lineIndex + 4)) 1 )"
 
 		if checkSectionStatus 'Step_2-Current' $hostBackuped; then # TODO : do it at the same time that others
 			if (( step1_CountFilesExcluded > 0 )); then
+
+#==============================================================================================================================================================#
+#       Trash all excluded files in Current                                                                                                                    #
+#==============================================================================================================================================================#
 
 				updateScreenCurrentAction 'Remove all excluded files :' 'Current'
 
@@ -2182,8 +2282,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 				progress_current_item_1_remaining=$progress_total_item_1
 # 				progress_current_size_1_remaining=$progress_total_size_1
 
-				source_folder="$PATH_BACKUP_FOLDER/$hostBackuped/Current"
-				excluded_folder="$PATH_BACKUP_FOLDER/_Trashed_/Excluded/$hostBackuped/Current"	# TODO : Current is not deleted while the Rotation !!!
+				declare sourceFolder="$PATH_BACKUP_FOLDER/$hostBackuped/Current"
+				declare excludedFolder="$PATH_BACKUP_FOLDER/_Trashed_/Excluded/$hostBackuped/Current"	# TODO : Current is not deleted while the Rotation !!!
 
 # 				action_tag="$A_EXCLUDED_R"
 # 				action_color="${S_NOLRE}"
@@ -2196,23 +2296,26 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 				max_file_name_size="$TIME_SIZE ${A_TAG_LENGTH_SIZE} $EMPTY_SIZE "
 # 				(( align_size = ${#action_context_size} - ${#rotationStatusSize}, max_file_name_size = $(tput cols) - ${#max_file_name_size} ))
 
-				cp -t "$pathWorkingDirectoryRAM" "$pathWorkingDirectory/Excluded-"{1..9}".files"
+				cp -t "$pathHWDR" "$pathHWDD/Excluded-"{1..9}".files"
 
-				while IFS= read -u ${canal} file_data; do
+				declare fileData filename fileType
+				declare canal fileSize # TODO need to be -i
 
-					file_size="${file_data:0:12}"
-					filename="${file_data:13}"
+				while IFS= read -u ${canal} fileData; do
 
-					((	step2_R_CountSizeExcluded -= file_size, --step2_R_CountFilesExcluded,
-						step2_P_CountSizeExcluded += file_size, ++step2_P_CountFilesExcluded,
+					fileSize="${fileData:0:12}"
+					filename="${fileData:13}"
 
-						stepA_R_CountSizeTotal -= file_size, --stepA_R_CountFilesTotal,
-						stepA_P_CountSizeTotal += file_size, ++stepA_P_CountFilesTotal	))
+					((	step2_R_CountSizeExcluded -= fileSize, --step2_R_CountFilesExcluded,
+						step2_P_CountSizeExcluded += fileSize, ++step2_P_CountFilesExcluded,
 
-					getFileTypeV file_type "$source_folder/$filename"
-					[[ "$file_type" == '   ' ]] && continue
+						stepA_R_CountSizeTotal -= fileSize, --stepA_R_CountFilesTotal,
+						stepA_P_CountSizeTotal += fileSize, ++stepA_P_CountFilesTotal	))
 
-					echoFilename "/$filename" $file_size "$A_EXCLUDED_R" "$S_NOLRE"
+					getFileTypeV fileType "$sourceFolder/$filename"
+					[[ "$fileType" == '   ' ]] && continue
+
+					echoFilename "/$filename" $fileSize "$A_EXCLUDED_R" "$S_NOLRE"
 
 					getPercentageV step2_R_PercentFilesExcluded $step2_R_CountFilesExcluded $step1_CountFilesExcluded
 					getPercentageV step2_R_PercentSizeExcluded  $step2_R_CountSizeExcluded  $step1_CountSizeExcluded
@@ -2220,8 +2323,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					getPercentageV step2_P_PercentFilesExcluded $step2_P_CountFilesExcluded $step1_CountFilesExcluded
 					getPercentageV step2_P_PercentSizeExcluded  $step2_P_CountSizeExcluded  $step1_CountSizeExcluded
 
-					echoStatPercent $step2_R_CountFilesExcluded $step2_R_CountSizeExcluded "$posExcuded1" "$S_NOLRE" "$step2_R_PercentFilesExcluded" "$step2_R_PercentSizeExcluded"
-					echoStatPercent $step2_P_CountFilesExcluded $step2_P_CountSizeExcluded "$posExcuded2" "$S_NOLRE" "$step2_P_PercentFilesExcluded" "$step2_P_PercentSizeExcluded"
+					echoStatPercent $step2_R_CountFilesExcluded $step2_R_CountSizeExcluded "$POS_EXCUDED_1" "$S_NOLRE" "$step2_R_PercentFilesExcluded" "$step2_R_PercentSizeExcluded"
+					echoStatPercent $step2_P_CountFilesExcluded $step2_P_CountSizeExcluded "$POS_EXCUDED_2" "$S_NOLRE" "$step2_P_PercentFilesExcluded" "$step2_P_PercentSizeExcluded"
 
 					getPercentageV stepA_R_PercentFilesTotal $stepA_R_CountFilesTotal $step1_CountFilesTotal
 					getPercentageV stepA_R_PercentSizeTotal  $stepA_R_CountSizeTotal  $step1_CountSizeTotal
@@ -2229,12 +2332,16 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					getPercentageV stepA_P_PercentFilesTotal $stepA_P_CountFilesTotal $step1_CountFilesTotal
 					getPercentageV stepA_P_PercentSizeTotal  $stepA_P_CountSizeTotal  $step1_CountSizeTotal
 
-					echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$posTotal1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
-					echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$posTotal2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
+					echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$POS_TOTAL_1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
+					echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$POS_TOTAL_2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
 
-					clonePathDetails "$source_folder" "$excluded_folder" "${filename%/*}"
-					mv -f "$source_folder/$filename" "$excluded_folder/$filename"
-				done {canal}< <(cat "$pathWorkingDirectoryRAM/Excluded-"{1..9}".files")
+					clonePathDetails "$sourceFolder" "$excludedFolder" "${filename%/*}"
+					# BUG TODO !! Folders flags need to be updated EACH time is the source is not the same... ie even if all folders already exists, they need to be updated
+					# between day-2 > day-3 and day-1 > day-2, because even if the path is the same, folders in day-1 has not obviously the same flags than day-2...
+					# BUT !! Update it each time for each files is a HUGE waste of time and ressource, so probably this need to collect all path that need to be updated and update them
+					# before the files transfert.... The longest TODO ever in this script :))
+					mv -f "$sourceFolder/$filename" "$excludedFolder/$filename"
+				done {canal}< <(cat "$pathHWDR/Excluded-"{1..9}".files")
 
 				getPercentageV step2_R_PercentFilesExcluded $step2_R_CountFilesExcluded $step1_CountFilesExcluded
 				getPercentageV step2_R_PercentSizeExcluded  $step2_R_CountSizeExcluded  $step1_CountSizeExcluded
@@ -2242,8 +2349,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 				getPercentageV step2_P_PercentFilesExcluded $step2_P_CountFilesExcluded $step1_CountFilesExcluded
 				getPercentageV step2_P_PercentSizeExcluded  $step2_P_CountSizeExcluded  $step1_CountSizeExcluded
 
-				echoStatPercent $step2_R_CountFilesExcluded $step2_R_CountSizeExcluded "$posExcuded1" "$S_NOLRE" "$step2_R_PercentFilesExcluded" "$step2_R_PercentSizeExcluded"
-				echoStatPercent $step2_P_CountFilesExcluded $step2_P_CountSizeExcluded "$posExcuded2" "$S_NOLRE" "$step2_P_PercentFilesExcluded" "$step2_P_PercentSizeExcluded"
+				echoStatPercent $step2_R_CountFilesExcluded $step2_R_CountSizeExcluded "$POS_EXCUDED_1" "$S_NOLRE" "$step2_R_PercentFilesExcluded" "$step2_R_PercentSizeExcluded"
+				echoStatPercent $step2_P_CountFilesExcluded $step2_P_CountSizeExcluded "$POS_EXCUDED_2" "$S_NOLRE" "$step2_P_PercentFilesExcluded" "$step2_P_PercentSizeExcluded"
 
 				getPercentageV stepA_R_PercentFilesTotal $stepA_R_CountFilesTotal $step1_CountFilesTotal
 				getPercentageV stepA_R_PercentSizeTotal  $stepA_R_CountSizeTotal  $step1_CountSizeTotal
@@ -2251,23 +2358,31 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 				getPercentageV stepA_P_PercentFilesTotal $stepA_P_CountFilesTotal $step1_CountFilesTotal
 				getPercentageV stepA_P_PercentSizeTotal  $stepA_P_CountSizeTotal  $step1_CountSizeTotal
 
-				echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$posTotal1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
-				echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$posTotal2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
+				echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$POS_TOTAL_1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
+				echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$POS_TOTAL_2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
 
-				rm -f "$pathWorkingDirectoryRAM/Excluded-"{1..9}".files"
+				rm -f "$pathHWDR/Excluded-"{1..9}".files"
 			fi
 
-			makeSectionStatusDone 'Step_2-Current' $hostBackuped
+			unset canal fileData filename fileType fileSize
+			unset sourceFolder excludedFolder
+
+			makeSectionStatusDoneX 'Step_2-Current' $hostBackuped
 		fi
 
-		for checked_folder in ${PERIOD_FOLDERS[@]}; do
-			updateScreenCurrentAction 'Remove all excluded files :' "$checked_folder"
-# 			getTimerV timer
-# 			echo -ne "\n\n$timer Searching $checked_folder...${ES_CURSOR_TO_LINE_END}\r${CO_UP_1}${CO_UP_1}"
+		for periodFolder in ${PERIOD_FOLDERS[@]}; do
 
-			if checkSectionStatus "Step_2-$checked_folder" $hostBackuped; then
-				source_folder="$PATH_BACKUP_FOLDER/$hostBackuped/$checked_folder"
-				excluded_folder="$PATH_BACKUP_FOLDER/$TRASH_FOLDER/Excluded/$hostBackuped/$checked_folder"
+#==============================================================================================================================================================#
+#       Trash all excluded files in others period                                                                                                              #
+#==============================================================================================================================================================#
+
+			updateScreenCurrentAction 'Remove all excluded files :' "$periodFolder"
+# 			getTimerV timer
+# 			echo -ne "\n\n$timer Searching $periodFolder...${ES_CURSOR_TO_LINE_END}\r${CO_UP_1}${CO_UP_1}"
+
+			if checkSectionStatus "Step_2-$periodFolder" $hostBackuped; then
+				declare sourceFolder="$PATH_BACKUP_FOLDER/$hostBackuped/$periodFolder"
+				declare excludedFolder="$PATH_BACKUP_FOLDER/$TRASH_FOLDER/Excluded/$hostBackuped/$periodFolder"
 
 # 				action_tag="$A_EXCLUDED_R"
 # 				action_color="${S_NOLRE}"
@@ -2280,66 +2395,74 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 				(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 "${A_EMPTY_TAG}" '')") ))
 
+				declare fileData filename fileType filePath
+				declare canal fileSize # TODO need to be -i
+
+				declare excludedItem searchedItem destinationItem searchedItemType
+
 				while read excludedItem; do
 # 					[[ -z "$excludedItem" ]] && continue
 
 					excludedItem="${excludedItem:1}"
 
-					searched_item="$source_folder/$excludedItem"
-					destination_item="$excluded_folder/$excludedItem"
-					getFileTypeV 'searched_item_type' "$source_folder/$excludedItem"
+					searchedItem="$sourceFolder/$excludedItem"
+					destinationItem="$excludedFolder/$excludedItem"
+					getFileTypeV searchedItemType "$sourceFolder/$excludedItem"
 
 # 					echo ":: CHECK $searched_item ($checked_folder) [$searched_item_type]"
 
-					[[ "$searched_item_type" == '   ' ]] && continue
+					[[ "$searchedItemType" == '   ' ]] && continue
 
-					regex='^E[ l]d$'
-					if [[ "$searched_item_type" =~ $regex ]]; then
-						clonePathDetails "$source_folder" "$excluded_folder" "$excludedItem"
+					if [[ "${searchedItemType:0:2}" == 'Ed' ]]; then
+						clonePathDetails "$sourceFolder" "$excludedFolder" "$excludedItem"
 
-						while IFS= read -u ${canal} file_data; do
-# 							echo ":: $file_data"
-							file_size="${file_data:0:12}"
-							filename="${file_data:13}"
-							file_path="${filename%/*}"
+						while IFS= read -u ${canal} fileData; do
+# 							echo ":: $fileData"
+							fileSize="${fileData:0:12}"
+							filename="${fileData:13}"
+							filePath="${filename%/*}"
 
-							((	step2_R_CountSizeExcluded -= file_size, --step2_R_CountFilesExcluded,
-								step2_P_CountSizeExcluded += file_size, ++step2_P_CountFilesExcluded	))
-# 							(( progress_current_size_1_processed += file_size, ++progress_current_item_1_processed ))
+							((	step2_R_CountSizeExcluded -= fileSize, --step2_R_CountFilesExcluded,
+								step2_P_CountSizeExcluded += fileSize, ++step2_P_CountFilesExcluded	))
+# 							(( progress_current_size_1_processed += fileSize, ++progress_current_item_1_processed ))
 
-							clonePathDetails "$searched_item" "$destination_item" "$file_path"
-							mv -f "$searched_item/$filename" "$destination_item/$filename"
+							clonePathDetails "$searchedItem" "$destinationItem" "$filePath"
+							mv -f "$searchedItem/$filename" "$destinationItem/$filename"
 
 							getPercentageV step2_P_PercentFilesExcluded $step2_P_CountFilesExcluded $step1_CountFilesExcluded
 							getPercentageV step2_P_PercentSizeExcluded  $step2_P_CountSizeExcluded  $step1_CountSizeExcluded
 
-							echoStatPercent $step2_P_CountFilesExcluded $step2_P_CountSizeExcluded "$posExcuded2" "$S_NOLRE" "$step2_P_PercentFilesExcluded" "$step2_P_PercentSizeExcluded"
+							echoStatPercent $step2_P_CountFilesExcluded $step2_P_CountSizeExcluded "$POS_EXCUDED_2" "$S_NOLRE" "$step2_P_PercentFilesExcluded" "$step2_P_PercentSizeExcluded"
 
-							echoFilename "/$filename" $file_size "$A_EXCLUDED_R" "$S_NOLRE"
-						done {canal}< <(find -P "$searched_item" -type f,l,p,s,b,c -printf '%12s %P\n')
+							echoFilename "/$filename" $fileSize "$A_EXCLUDED_R" "$S_NOLRE"
+						done {canal}< <(find -P "$searchedItem" -type f,l,p,s,b,c -printf '%12s %P\n')
 					else
 # 						echo 'else'
-						getFileSizeV 'file_size' "$source_folder/$excludedItem"
+						getFileSizeV fileSize "$sourceFolder/$excludedItem"
 						filename="$excludedItem"
 
-						((	step2_R_CountSizeExcluded -= file_size, --step2_R_CountFilesExcluded,
-							step2_P_CountSizeExcluded += file_size, ++step2_P_CountFilesExcluded	))
-# 						(( progress_current_size_1_processed += file_size, ++progress_current_item_1_processed ))
+						((	step2_R_CountSizeExcluded -= fileSize, --step2_R_CountFilesExcluded,
+							step2_P_CountSizeExcluded += fileSize, ++step2_P_CountFilesExcluded	))
+# 						(( progress_current_size_1_processed += fileSize, ++progress_current_item_1_processed ))
 
-						clonePathDetails "$source_folder" "$excluded_folder" "${excludedItem/*}"
-						mv -f "$source_folder/$excludedItem" "$excluded_folder/$excludedItem"
+						clonePathDetails "$sourceFolder" "$excludedFolder" "${excludedItem/*}"
+						mv -f "$sourceFolder/$excludedItem" "$excludedFolder/$excludedItem"
 
 						getPercentageV step2_P_PercentFilesExcluded $step2_P_CountFilesExcluded $step1_CountFilesExcluded
 						getPercentageV step2_P_PercentSizeExcluded  $step2_P_CountSizeExcluded  $step1_CountSizeExcluded
 
-						echoStatPercent $step2_P_CountFilesExcluded $step2_P_CountSizeExcluded "$posExcuded2" "$S_NOLRE" "$step2_P_PercentFilesExcluded" "$step2_P_PercentSizeExcluded"
+						echoStatPercent $step2_P_CountFilesExcluded $step2_P_CountSizeExcluded "$POS_EXCUDED_2" "$S_NOLRE" "$step2_P_PercentFilesExcluded" "$step2_P_PercentSizeExcluded"
 
-						echoFilename "/$filename" $file_size "$A_EXCLUDED_R" "$S_NOLRE"
+						echoFilename "/$filename" $fileSize "$A_EXCLUDED_R" "$S_NOLRE"
 					fi
 
-				done < "$pathWorkingDirectory/Exclude.items"
+				done < "$pathHWDR/Exclude.items"
 
-				makeSectionStatusDone "Step_2-$checked_folder" $hostBackuped
+				unset canal fileData filename fileType filePath fileSize
+				unset excludedItem searchedItem destinationItem searchedItemType
+				unset sourceFolder excludedFolder
+
+				makeSectionStatusDoneX "Step_2-$periodFolder" $hostBackuped
 			fi
 		done
 
@@ -2352,32 +2475,33 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 			rm -f "$output_file_name"
 # 		done
 
-		makeSectionStatusDone 'Step_2' $hostBackuped
+		unset periodFolder
+		unset step2_P_CountFilesExcluded step2_R_CountFilesExcluded step2_P_CountSizeExcluded step2_R_CountSizeExcluded
+		unset step2_P_PercentFilesExcluded step2_R_PercentFilesExcluded step2_P_PercentSizeExcluded step2_R_PercentSizeExcluded
+
+
+		makeSectionStatusDoneX 'Step_2' $hostBackuped
 # 	else
 # 		showTitle "$hostBackuped : Remove all excluded files..." "${A_SKIPPED}"
 	fi
 
-
-################################################################################
-################################################################################
-####                                                                        ####
-####     STEP 3 : Make an archive of modified files or removed files        ####
-####                                                                        ####
-################################################################################
-################################################################################
+################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Archive modified or removed files (Step 3)                                                                                                            ##
+##                                                                                                                                                            ##
+################################################################################################################################################################
 
 	if checkSectionStatus 'Step_3' $hostBackuped; then
+
+#==============================================================================================================================================================#
+#       Make some initialization                                                                                                                               #
+#==============================================================================================================================================================#
+
 		updateScreenCurrentAction 'Archive modified or removed files...'
-
-
-
-#==============================================================================#
-#==     Initialize some used variables                                       ==#
-#==============================================================================#
 
 # 		lineIndex=7
 #
-# 		declare posUpdated2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 3) )))"
+# 		declare POS_UPDATED_2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 3) )))"
 # 		posFilename="$(getCSI_CursorMove Position $(( lineIndex + 4)) 1 )"
 
 # 		PROGRESS_TOTAL_ITEM=$(( ${step1_CountFilesRemoved} + ${step1_CountFilesUpdated1} ))
@@ -2398,23 +2522,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		getPercentageV step3_P_PercentFilesArchived $step3_P_CountFilesArchived $step3_T_CountFilesArchived
 		getPercentageV step3_P_PercentSizeArchived  $step3_P_CountSizeArchived  $step3_T_CountSizeArchived
 
-		echoStatPercent $step3_R_CountFilesArchived $step3_R_CountSizeArchived "$posArchived1" "$S_NOMAG" "$step3_R_PercentFilesArchived" "$step3_R_PercentSizeArchived"
-		echoStatPercent $step3_P_CountFilesArchived $step3_P_CountSizeArchived "$posArchived2" "$S_NOMAG" "$step3_P_PercentFilesArchived" "$step3_P_PercentSizeArchived"
-
-		declare -i step3_P_CountFilesRemoved=0		step3_R_CountFilesRemoved=$step1_CountFilesRemoved
-		declare -i step3_P_CountSizeRemoved=0		step3_R_CountSizeRemoved=$step1_CountSizeRemoved
-
-		declare    step3_P_PercentFilesRemoved		step3_R_PercentFilesRemoved
-		declare    step3_P_PercentSizeRemoved		step3_R_PercentSizeRemoved
-
-		getPercentageV step3_R_PercentFilesRemoved $step3_R_CountFilesRemoved $step1_CountFilesRemoved
-		getPercentageV step3_R_PercentSizeRemoved  $step3_R_CountSizeRemoved  $step1_CountSizeRemoved
-
-		getPercentageV step3_P_PercentFilesRemoved $step3_P_CountFilesRemoved $step1_CountFilesRemoved
-		getPercentageV step3_P_PercentSizeRemoved  $step3_P_CountSizeRemoved  $step1_CountSizeRemoved
-
-		echoStatPercent $step3_R_CountFilesRemoved $step3_R_CountSizeRemoved "$posRemoved1" "$S_NOMAG" "$step3_R_PercentFilesRemoved" "$step3_R_PercentSizeRemoved"
-		echoStatPercent $step3_P_CountFilesRemoved $step3_P_CountSizeRemoved "$posRemoved2" "$S_NOMAG" "$step3_P_PercentFilesRemoved" "$step3_P_PercentSizeRemoved"
+		echoStatPercent $step3_R_CountFilesArchived $step3_R_CountSizeArchived "$POS_ARCHIVED_1" "$S_NOMAG" "$step3_R_PercentFilesArchived" "$step3_R_PercentSizeArchived"
+		echoStatPercent $step3_P_CountFilesArchived $step3_P_CountSizeArchived "$POS_ARCHIVED_2" "$S_NOMAG" "$step3_P_PercentFilesArchived" "$step3_P_PercentSizeArchived"
 
 # 		PROGRESS_TOTAL_ITEM=${step1_CountFilesUpdated1}
 # 		PROGRESS_TOTAL_SIZE=${step1_CountSizeUpdated1}
@@ -2433,18 +2542,25 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 			eval "$save_stat_step_3"
 # 		fi
 
-		if [[ -f "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_3.var" ]]; then
-			. "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+		if [[ -f "$pathHWDD/$VARIABLES_FOLDER/$hostBackuped-Step_3.var" ]]; then
+			. "$pathHWDD/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
 		else
-# 			declare -p PROGRESS_TOTAL_ITEM PROGRESS_TOTAL_SIZE PROGRESS_CURRENT_FILES_ITEM PROGRESS_CURRENT_FILES_SIZE >| "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
+# 			declare -p PROGRESS_TOTAL_ITEM PROGRESS_TOTAL_SIZE PROGRESS_CURRENT_FILES_ITEM PROGRESS_CURRENT_FILES_SIZE >| "$pathHWDD/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
 			: # TODO
 		fi
 
-		DstExcluded="$PATH_BACKUP_FOLDER/$TRASH_FOLDER/Rotation/$hostBackuped/Day-1"
-		DstArchive="$PATH_BACKUP_FOLDER/$hostBackuped/Day-1"
-		SrcArchive="$PATH_BACKUP_FOLDER/$hostBackuped/Current"
+		declare sourceFolder="$PATH_BACKUP_FOLDER/$hostBackuped/Current"
+		declare destinationFolder="$PATH_BACKUP_FOLDER/$hostBackuped/Day-1"
+		declare excludedFolder="$PATH_BACKUP_FOLDER/$TRASH_FOLDER/Rotation/$hostBackuped/Day-1"	# TODO : Go to Current instead ?? A good way to clean it in the Rotation after...
 
 		if checkSectionStatus 'Step_3-Update' $hostBackuped; then
+
+#==============================================================================================================================================================#
+#       Archive modified files                                                                                                                                 #
+#==============================================================================================================================================================#
+
 			updateScreenCurrentAction 'Archive modified files...'
 
 			if (( isNewDay == 1 )); then
@@ -2455,13 +2571,6 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 				ActionColor="${S_NOCYA}"
 			fi
 
-
-
-#==============================================================================#
-#==     Just copy modified files with cp                                     ==#
-#==============================================================================#
-# Using cp to ensure permission are keeped with this local copy...
-
 			if (( step1_CountFilesUpdated1 > 0 )); then
 
 				((	stepA_P_CountFilesChecked = 0,	stepA_P_CountSizeChecked = 0,
@@ -2470,21 +2579,24 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 				(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 "${A_EMPTY_TAG}" '')") ))
 
-				cp -t "$pathWorkingDirectoryRAM/" "$pathWorkingDirectory/Updated1-"{1..9}".files"
+				cp -t "$pathHWDR/" "$pathHWDD/Updated1-"{1..9}".files"
 
-				while IFS= read -u ${canal} file_data; do
+				declare fileData filename
+				declare canal fileSize # TODO need to be -i
 
-					size="${file_data:0:12}"	# TODO : fileSize ??
-					filename="${file_data:13}"
+				while IFS= read -u ${canal} fileData; do
 
-					if [[ ! -f "$SrcArchive/$filename" ]]; then	# BUG ! : this bug with pipe or socket file...
+					fileSize="${fileData:0:12}"	# TODO : fileSize ??
+					filename="${fileData:13}"
+
+					if [[ ! -f "$sourceFolder/$filename" ]]; then	# BUG ! : this bug with pipe or socket file...
 						continue
 					fi
 
-					((	step3_R_CountSizeArchived -= size, --step3_R_CountFilesArchived,
-						step3_P_CountSizeArchived += size, ++step3_P_CountFilesArchived,
-						stepA_R_CountSizeChecked += size,  ++stepA_R_CountFilesChecked,
-						stepA_T_CountSizeChecked += size,  ++stepA_T_CountFilesChecked	))
+					((	step3_R_CountSizeArchived -= fileSize, --step3_R_CountFilesArchived,
+						step3_P_CountSizeArchived += fileSize, ++step3_P_CountFilesArchived,
+						stepA_R_CountSizeChecked += fileSize,  ++stepA_R_CountFilesChecked,
+						stepA_T_CountSizeChecked += fileSize,  ++stepA_T_CountFilesChecked	))
 
 					getPercentageV step3_R_PercentFilesArchived $step3_R_CountFilesArchived $step3_T_CountFilesArchived
 					getPercentageV step3_R_PercentSizeArchived  $step3_R_CountSizeArchived  $step3_T_CountSizeArchived
@@ -2492,39 +2604,59 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					getPercentageV step3_P_PercentFilesArchived $step3_P_CountFilesArchived $step3_T_CountFilesArchived
 					getPercentageV step3_P_PercentSizeArchived  $step3_P_CountSizeArchived  $step3_T_CountSizeArchived
 
-					echoStatPercent $step3_R_CountFilesArchived $step3_R_CountSizeArchived "$posArchived1" "$S_NOMAG" "$step3_R_PercentFilesArchived" "$step3_R_PercentSizeArchived"
-					echoStatPercent $step3_P_CountFilesArchived $step3_P_CountSizeArchived "$posArchived2" "$S_NOMAG" "$step3_P_PercentFilesArchived" "$step3_P_PercentSizeArchived"
+					echoStatPercent $step3_R_CountFilesArchived $step3_R_CountSizeArchived "$POS_ARCHIVED_1" "$S_NOMAG" "$step3_R_PercentFilesArchived" "$step3_R_PercentSizeArchived"
+					echoStatPercent $step3_P_CountFilesArchived $step3_P_CountSizeArchived "$POS_ARCHIVED_2" "$S_NOMAG" "$step3_P_PercentFilesArchived" "$step3_P_PercentSizeArchived"
 
-					echoStat $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$posChecked1" "$S_NOYEL"
+					echoStat $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$POS_CHECKED_1" "$S_NOYEL"
 
-					echoFilename "/$filename" $size "$Action" "$ActionColor"
+					echoFilename "/$filename" $fileSize "$Action" "$ActionColor"
 
 					if (( isNewDay == 1 )); then
-						clonePathDetails "$SrcArchive" "$DstArchive" "${filename%/*}"
-						if [[ -f "$DstArchive/$filename" ]]; then
-							clonePathDetails "$DstArchive" "$DstExcluded" "${filename%/*}"
-							mv -f "$DstArchive/$filename" "$DstExcluded/$filename"
+						clonePathDetails "$sourceFolder" "$destinationFolder" "${filename%/*}"
+						if [[ -f "$destinationFolder/$filename" ]]; then
+							clonePathDetails "$destinationFolder" "$excludedFolder" "${filename%/*}"
+							mv -f "$destinationFolder/$filename" "$excludedFolder/$filename"
 						fi
-						cp -fP --preserve=mode,ownership,timestamps,links --remove-destination "$SrcArchive/$filename" "$DstArchive/$filename"
+
+						# Using cp instead of rsync to ensure permission are keeped with this local copy...
+						cp -fP --preserve=mode,ownership,timestamps,links --remove-destination "$sourceFolder/$filename" "$destinationFolder/$filename"
 					fi
-				done {canal}< <(cat "$pathWorkingDirectoryRAM/Updated1-"{1..9}".files")
+				done {canal}< <(cat "$pathHWDR/Updated1-"{1..9}".files")
 
-				rm -f "$pathWorkingDirectoryRAM/Updated1-"{1..9}".files"
+				rm -f "$pathHWDR/Updated1-"{1..9}".files"
 
-# 				declare -p PROGRESS_TOTAL_ITEM PROGRESS_TOTAL_SIZE PROGRESS_CURRENT_FILES_ITEM PROGRESS_CURRENT_FILES_SIZE >| "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
+				unset canal fileData filename fileSize
+
+# 				declare -p PROGRESS_TOTAL_ITEM PROGRESS_TOTAL_SIZE PROGRESS_CURRENT_FILES_ITEM PROGRESS_CURRENT_FILES_SIZE >| "$pathHWDD/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
 			fi
 
-			makeSectionStatusDone 'Step_3-Update' $hostBackuped
+			makeSectionStatusDoneX 'Step_3-Update' $hostBackuped
 		fi
 
-
-
-#==============================================================================#
-#==     Move the removed files to the archive                                ==#
-#==============================================================================#
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
 		if checkSectionStatus 'Step_3-Remove' $hostBackuped; then
+
+#==============================================================================================================================================================#
+#       Archive removed files                                                                                                                                  #
+#==============================================================================================================================================================#
+
 			updateScreenCurrentAction 'Archive removed files...'
+
+			declare -i step3_P_CountFilesRemoved=0		step3_R_CountFilesRemoved=$step1_CountFilesRemoved
+			declare -i step3_P_CountSizeRemoved=0		step3_R_CountSizeRemoved=$step1_CountSizeRemoved
+
+			declare    step3_P_PercentFilesRemoved		step3_R_PercentFilesRemoved
+			declare    step3_P_PercentSizeRemoved		step3_R_PercentSizeRemoved
+
+			getPercentageV step3_R_PercentFilesRemoved $step3_R_CountFilesRemoved $step1_CountFilesRemoved
+			getPercentageV step3_R_PercentSizeRemoved  $step3_R_CountSizeRemoved  $step1_CountSizeRemoved
+
+			getPercentageV step3_P_PercentFilesRemoved $step3_P_CountFilesRemoved $step1_CountFilesRemoved
+			getPercentageV step3_P_PercentSizeRemoved  $step3_P_CountSizeRemoved  $step1_CountSizeRemoved
+
+			echoStatPercent $step3_R_CountFilesRemoved $step3_R_CountSizeRemoved "$POS_REMOVED_1" "$S_NOMAG" "$step3_R_PercentFilesRemoved" "$step3_R_PercentSizeRemoved"
+			echoStatPercent $step3_P_CountFilesRemoved $step3_P_CountSizeRemoved "$POS_REMOVED_2" "$S_NOMAG" "$step3_P_PercentFilesRemoved" "$step3_P_PercentSizeRemoved"
 
 			if (( step1_CountFilesRemoved > 0 )); then
 
@@ -2538,7 +2670,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 #
 # 				lineIndex=7
 #
-# 				declare posRemoved2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 2) )))"
+# 				declare POS_REMOVED_2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 2) )))"
 # 				posFilename="$(getCSI_CursorMove Position $(( lineIndex + 4)) 1 )"
 
 # 				Action="$A_BACKUPED_G"
@@ -2546,25 +2678,28 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 				(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 "${A_EMPTY_TAG}" '')") ))
 
-				cp -t "$pathWorkingDirectoryRAM" "$pathWorkingDirectory/Removed-"{1..9}".files"
+				cp -t "$pathHWDR" "$pathHWDD/Removed-"{1..9}".files"
 
-				while IFS= read -u ${canal} file_data; do	# TODO : Make a function with this loop ?? (used in excluded files, backuped files and here...)
+				declare fileData filename
+				declare canal fileSize # TODO need to be -i
 
-					size="${file_data:0:12}"
-					filename="${file_data:13}"
+				while IFS= read -u ${canal} fileData; do	# TODO : Make a function with this loop ?? (used in excluded files, backuped files and here...)
 
-					if [[ ! -f "$SrcArchive/$filename" ]]; then	# BUG !!
+					fileSize="${fileData:0:12}"
+					filename="${fileData:13}"
+
+					if [[ ! -f "$sourceFolder/$filename" ]]; then	# BUG !!
 						continue
 					fi
 
-					((	step3_R_CountSizeArchived -= size, --step3_R_CountFilesArchived,
-						step3_P_CountSizeArchived += size, ++step3_P_CountFilesArchived,
+					((	step3_R_CountSizeArchived -= fileSize, --step3_R_CountFilesArchived,
+						step3_P_CountSizeArchived += fileSize, ++step3_P_CountFilesArchived,
 
-						step3_R_CountSizeRemoved -= size, --step3_R_CountFilesRemoved,
-						step3_P_CountSizeRemoved += size, ++step3_P_CountFilesRemoved,
+						step3_R_CountSizeRemoved -= fileSize, --step3_R_CountFilesRemoved,
+						step3_P_CountSizeRemoved += fileSize, ++step3_P_CountFilesRemoved,
 
-						stepA_R_CountSizeTotal -= size, --stepA_R_CountFilesTotal,
-						stepA_P_CountSizeTotal += size, ++stepA_P_CountFilesTotal	))
+						stepA_R_CountSizeTotal -= fileSize, --stepA_R_CountFilesTotal,
+						stepA_P_CountSizeTotal += fileSize, ++stepA_P_CountFilesTotal	))
 
 					getPercentageV step3_R_PercentFilesArchived $step3_R_CountFilesArchived $step3_T_CountFilesArchived
 					getPercentageV step3_R_PercentSizeArchived  $step3_R_CountSizeArchived  $step3_T_CountSizeArchived
@@ -2572,8 +2707,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					getPercentageV step3_P_PercentFilesArchived $step3_P_CountFilesArchived $step3_T_CountFilesArchived
 					getPercentageV step3_P_PercentSizeArchived  $step3_P_CountSizeArchived  $step3_T_CountSizeArchived
 
-					echoStatPercent $step3_R_CountFilesArchived $step3_R_CountSizeArchived "$posArchived1" "$S_NOMAG" "$step3_R_PercentFilesArchived" "$step3_R_PercentSizeArchived"
-					echoStatPercent $step3_P_CountFilesArchived $step3_P_CountSizeArchived "$posArchived2" "$S_NOMAG" "$step3_P_PercentFilesArchived" "$step3_P_PercentSizeArchived"
+					echoStatPercent $step3_R_CountFilesArchived $step3_R_CountSizeArchived "$POS_ARCHIVED_1" "$S_NOMAG" "$step3_R_PercentFilesArchived" "$step3_R_PercentSizeArchived"
+					echoStatPercent $step3_P_CountFilesArchived $step3_P_CountSizeArchived "$POS_ARCHIVED_2" "$S_NOMAG" "$step3_P_PercentFilesArchived" "$step3_P_PercentSizeArchived"
 
 					getPercentageV step3_R_PercentFilesRemoved $step3_R_CountFilesRemoved $step1_CountFilesRemoved
 					getPercentageV step3_R_PercentSizeRemoved  $step3_R_CountSizeRemoved  $step1_CountSizeRemoved
@@ -2581,8 +2716,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					getPercentageV step3_P_PercentFilesRemoved $step3_P_CountFilesRemoved $step1_CountFilesRemoved
 					getPercentageV step3_P_PercentSizeRemoved  $step3_P_CountSizeRemoved  $step1_CountSizeRemoved
 
-					echoStatPercent $step3_R_CountFilesRemoved $step3_R_CountSizeRemoved "$posRemoved1" "$S_NORED" "$step3_R_PercentFilesRemoved" "$step3_R_PercentSizeRemoved"
-					echoStatPercent $step3_P_CountFilesRemoved $step3_P_CountSizeRemoved "$posRemoved2" "$S_NORED" "$step3_P_PercentFilesRemoved" "$step3_P_PercentSizeRemoved"
+					echoStatPercent $step3_R_CountFilesRemoved $step3_R_CountSizeRemoved "$POS_REMOVED_1" "$S_NORED" "$step3_R_PercentFilesRemoved" "$step3_R_PercentSizeRemoved"
+					echoStatPercent $step3_P_CountFilesRemoved $step3_P_CountSizeRemoved "$POS_REMOVED_2" "$S_NORED" "$step3_P_PercentFilesRemoved" "$step3_P_PercentSizeRemoved"
 
 					getPercentageV stepA_R_PercentFilesTotal $stepA_R_CountFilesTotal $step1_CountFilesTotal
 					getPercentageV stepA_R_PercentSizeTotal  $stepA_R_CountSizeTotal  $step1_CountSizeTotal
@@ -2590,36 +2725,46 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					getPercentageV stepA_P_PercentFilesTotal $stepA_P_CountFilesTotal $step1_CountFilesTotal
 					getPercentageV stepA_P_PercentSizeTotal  $stepA_P_CountSizeTotal  $step1_CountSizeTotal
 
-					echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$posTotal1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
-					echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$posTotal2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
+					echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$POS_TOTAL_1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
+					echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$POS_TOTAL_2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
 
-					echoFilename "/$filename" $size "$A_BACKUPED_Y" "$S_NORED"
+					echoFilename "/$filename" $fileSize "$A_BACKUPED_Y" "$S_NORED"
 
-					clonePathDetails "$SrcArchive" "$DstArchive" "${filename%/*}"
-					if [[ -f "$DstArchive/$filename" ]]; then
-						clonePathDetails "$DstArchive" "$DstExcluded" "${filename%/*}"
-						mv -f "$DstArchive/$filename" "$DstExcluded/$filename"
+					clonePathDetails "$sourceFolder" "$destinationFolder" "${filename%/*}"
+					if [[ -f "$destinationFolder/$filename" ]]; then
+						clonePathDetails "$destinationFolder" "$excludedFolder" "${filename%/*}"
+						mv -f "$destinationFolder/$filename" "$excludedFolder/$filename"
 					fi
-					mv -f "$SrcArchive/$filename" "$DstArchive/$filename"
-				done  {canal}< <(cat "$pathWorkingDirectoryRAM/Removed-"{1..9}".files")
+					mv -f "$sourceFolder/$filename" "$destinationFolder/$filename"
+				done  {canal}< <(cat "$pathHWDR/Removed-"{1..9}".files")
 
-# 				declare -p PROGRESS_TOTAL_ITEM PROGRESS_TOTAL_SIZE PROGRESS_CURRENT_FILES_ITEM PROGRESS_CURRENT_FILES_SIZE >| "$pathWorkingDirectory/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
+# 				declare -p PROGRESS_TOTAL_ITEM PROGRESS_TOTAL_SIZE PROGRESS_CURRENT_FILES_ITEM PROGRESS_CURRENT_FILES_SIZE >| "$pathHWDD/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
 
-				rm -f "$pathWorkingDirectoryRAM/Removed-"{1..9}".files"
+				rm -f "$pathHWDR/Removed-"{1..9}".files"
+
+				unset canal fileData filename fileSize
 			fi
 
-			makeSectionStatusDone 'Step_3-Remove' $hostBackuped
+			unset step3_P_CountFilesRemoved step3_R_CountFilesRemoved step3_P_CountSizeRemoved step3_R_CountSizeRemoved
+			unset step3_P_PercentFilesRemoved step3_R_PercentFilesRemoved step3_P_PercentSizeRemoved step3_R_PercentSizeRemoved
+
+			makeSectionStatusDoneX 'Step_3-Remove' $hostBackuped
 		fi
 
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
+		unset step3_T_CountFilesArchived step3_T_CountSizeArchived
+		unset step3_P_CountFilesArchived step3_R_CountFilesArchived step3_P_CountSizeArchived step3_R_CountSizeArchived
+		unset step3_P_PercentFilesArchived step3_R_PercentFilesArchived step3_P_PercentSizeArchived step3_R_PercentSizeArchived
 
-#==============================================================================#
-#==     Check integrity of files copied in the archive                       ==#
-#==============================================================================#
-
-		declare -r A_RESENDED="$(getActionTag 'RESENDED' "$S_NOYEL")"
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
 		if checkSectionStatus 'Step_3-Checksum' $hostBackuped; then
+
+#==============================================================================================================================================================#
+#       Check integrity of files copied while the archive process                                                                                              #
+#==============================================================================================================================================================#
+
 			updateScreenCurrentAction 'Check new archived files...'
 
 			if (( isNewDay == 1 && step1_CountFilesUpdated1 > 0 )); then
@@ -2634,46 +2779,50 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 # 				lineIndex=7
 #
-# 				declare posChecked2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 8) )))"
+# 				declare POS_CHECKED_2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 8) )))"
 # 				posFilename="$(getCSI_CursorMove Position $(( lineIndex + 4)) 1 )"
 
 				(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 "${A_EMPTY_TAG}" '')") ))
 
-				cat "$pathWorkingDirectory/Updated1-"{1..9}".files" > "$pathWorkingDirectoryRAM/ToCheck.files"
-				sed -ir 's/^ *[0-9]\+ //' "$pathWorkingDirectoryRAM/ToCheck.files"
-				echo -n '' > "$pathWorkingDirectoryRAM/ToReCheck.files"
+				cat "$pathHWDD/Updated1-"{1..9}".files" > "$pathHWDR/ToCheck.files"
+				sed -ir 's/^ *[0-9]\+ //' "$pathHWDR/ToCheck.files"
+				echo -n '' > "$pathHWDR/ToReCheck.files"
 
-				for SizeIndex in {1..5}; do
+				declare -i sizeIndex
 
-					if ! checkSectionStatus "Step_3-Checksum-$SizeIndex" $hostBackuped; then
+				for sizeIndex in {1..5}; do
+
+					if ! checkSectionStatus "Step_3-Checksum-$sizeIndex" $hostBackuped; then
 						continue
 					fi
 
-					case $SizeIndex in
+					declare sizeLimit offsetSize sizeLimitText
+
+					case $sizeIndex in
 						1)
-							SizeLimit='--max-size=1MB-1'
-							OffsetSize='200'
-							SizeLimitText='<1MB'
+							sizeLimit='--max-size=1MB-1'
+							offsetSize='200'
+							sizeLimitText='<1MB'
 						;;
 						2)
-							SizeLimit='--min-size=1MB --max-size=10MB-1'
-							OffsetSize='40'
-							SizeLimitText='1MB ~ 10MB'
+							sizeLimit='--min-size=1MB --max-size=10MB-1'
+							offsetSize='40'
+							sizeLimitText='1MB ~ 10MB'
 						;;
 						3)
-							SizeLimit='--min-size=10MB --max-size=100MB-1'
-							OffsetSize='10'
-							SizeLimitText='10MB ~ 100MB'
+							sizeLimit='--min-size=10MB --max-size=100MB-1'
+							offsetSize='10'
+							sizeLimitText='10MB ~ 100MB'
 						;;
 						4)
-							SizeLimit='--min-size=100MB --max-size=1GB-1'
-							OffsetSize='5'
-							SizeLimitText='100MB ~ 1GB'
+							sizeLimit='--min-size=100MB --max-size=1GB-1'
+							offsetSize='5'
+							sizeLimitText='100MB ~ 1GB'
 						;;
 						5)
-							SizeLimit='--min-size=1GB'
-							OffsetSize='1'
-							SizeLimitText='>1GB'
+							sizeLimit='--min-size=1GB'
+							offsetSize='1'
+							sizeLimitText='>1GB'
 						;;
 					esac
 
@@ -2688,9 +2837,11 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 						formatSizeV 'Size1' ${PROGRESS_CURRENT_SIZE} 15
 # 						formatSizeV 'Size2' ${PROGRESS_CURRENT_FILES_SIZE} 15
 
-# 						echo -ne "$Time ${S_BOWHI}>>>${S_R_AL} $rotationStatus ($hostBackuped) Checksum of archive ($SizeLimitText :: 0) : ${S_NOGRE}${PROGRESS_CURRENT_ITEM}${S_R_AL} $P_ExcludingProgressItem ($Size1 $P_ExcludingProgressSize) - ${S_NOYEL}${PROGRESS_CURRENT_FILES_ITEM}${S_R_AL} $P_ExcludingProgressFilesItem ($Size2 $P_ExcludingProgressFilesSize)\r"
+# 						echo -ne "$Time ${S_BOWHI}>>>${S_R_AL} $rotationStatus ($hostBackuped) Checksum of archive ($sizeLimitText :: 0) : ${S_NOGRE}${PROGRESS_CURRENT_ITEM}${S_R_AL} $P_ExcludingProgressItem ($Size1 $P_ExcludingProgressSize) - ${S_NOYEL}${PROGRESS_CURRENT_FILES_ITEM}${S_R_AL} $P_ExcludingProgressFilesItem ($Size2 $P_ExcludingProgressFilesSize)\r"
 
-						for Index in {1..10}; do
+						declare -i index
+
+						for index in {1..10}; do
 # 							freeCache > /dev/null
 # 							ssh $hostBackuped 'freeCache > /dev/null'
 
@@ -2698,20 +2849,23 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 # 							lastAction=0
 
-							while read -u ${canal} Line; do
-								if [[ "${Line:0:1}" != '>' ]]; then
+							declare fileData filename fileType fileAction actionFlags
+							declare canal fileSize	# TODO Need to become -i
+
+							while read -u ${canal} fileData; do
+								if [[ "${fileData:0:1}" != '>' ]]; then
 									continue
 								fi
 
-								filename="${Line:27}"
+								filename="${fileData:27}"
 
 								if [[ "${filename:(-1)}" == '/' ]]; then
 									continue
 								fi
 
-								size="${Line:2:12}"
+								fileSize="${fileData:2:12}"
 
-								if [[ "${Line:16:1}" == 'L' ]]; then
+								if [[ "${fileData:16:1}" == 'L' ]]; then
 									IsFile=0
 									TypeColor="${S_IT}"
 								else
@@ -2719,9 +2873,9 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 									TypeColor=''
 								fi
 
-								ActionUpdateType="${Line:15:1}"
+								fileAction="${fileData:15:1}"
 
-								if [[ "$ActionUpdateType" == '.' ]]; then
+								if [[ "$fileAction" == '.' ]]; then
 # 									if [[ $lastAction -ne 1 ]]; then # 1 = Successed
 # 										Action="$A_SUCCESSED"
 #
@@ -2730,8 +2884,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 										lastAction=1
 # 									fi
 
-									((	stepA_R_CountSizeChecked -= size,  --stepA_R_CountFilesChecked,
-										stepA_P_CountSizeChecked += size,  ++stepA_P_CountFilesChecked	))
+									((	stepA_R_CountSizeChecked -= fileSize,  --stepA_R_CountFilesChecked,
+										stepA_P_CountSizeChecked += fileSize,  ++stepA_P_CountFilesChecked	))
 
 									getPercentageV stepA_R_PercentFilesChecked $stepA_R_CountFilesChecked $stepA_T_CountFilesChecked
 									getPercentageV stepA_R_PercentSizeChecked  $stepA_R_CountSizeChecked  $stepA_T_CountSizeChecked
@@ -2739,10 +2893,10 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 									getPercentageV stepA_P_PercentFilesChecked $stepA_P_CountFilesChecked $stepA_T_CountFilesChecked
 									getPercentageV stepA_P_PercentSizeChecked  $stepA_P_CountSizeChecked  $stepA_T_CountSizeChecked
 
-									echoStatPercent $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$posChecked1" "$S_NOYEL" "$stepA_R_PercentFilesChecked" "$stepA_R_PercentSizeChecked"
-									echoStatPercent $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$posChecked2" "$S_NOYEL" "$stepA_P_PercentFilesChecked" "$stepA_P_PercentSizeChecked"
+									echoStatPercent $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$POS_CHECKED_1" "$S_NOYEL" "$stepA_R_PercentFilesChecked" "$stepA_R_PercentSizeChecked"
+									echoStatPercent $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$POS_CHECKED_2" "$S_NOYEL" "$stepA_P_PercentFilesChecked" "$stepA_P_PercentSizeChecked"
 
-									echoFilename "/$filename" $size "$A_SUCCESSED" "$S_NOGRE"
+									echoFilename "/$filename" $fileSize "$A_SUCCESSED" "$S_NOGRE"
 								else
 # 									if [[ $lastAction -ne 2 ]]; then # 2 = Resended
 # 										Action="$A_RESENDED"
@@ -2753,50 +2907,54 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 									fi
 
 									(( ++PROGRESS_CURRENT_RESENDED ))
-									echo "$filename" >> "$pathWorkingDirectoryRAM/ToReCheck.files"
+									echo "$filename" >> "$pathHWDR/ToReCheck.files"
 
-									echoFilename "/$filename" $size "$A_RESENDED" "$S_NOYEL"
+									echoFilename "/$filename" $fileSize "$A_RESENDED" "$S_NOYEL"
 								fi
-							done {canal}< <(rsync -vvitpoglDmc --files-from="$pathWorkingDirectoryRAM/ToCheck.files" --modify-window=5 \
-										--preallocate --inplace --no-whole-file --block-size=32768 $SizeLimit \
-										--info=name2,backup,del,copy --out-format="> %12l %i %n" "$PATH_BACKUP_FOLDER/$hostBackuped/Current" "$PATH_BACKUP_FOLDER/$hostBackuped/Day-1/")
+							done {canal}< <(rsync -vvitpoglDmc --files-from="$pathHWDR/ToCheck.files" --modify-window=5 \
+												--preallocate --inplace --no-whole-file --block-size=32768 $sizeLimit \
+												--info=name2,backup,del,copy --out-format="> %12l %i %n" "$PATH_BACKUP_FOLDER/$hostBackuped/Current" "$PATH_BACKUP_FOLDER/$hostBackuped/Day-1/")
 
-							if (( $(wc -l < "$pathWorkingDirectoryRAM/ToReCheck.files") == 0 )); then
+							unset canal fileData filename fileType fileAction actionFlags fileSize
+
+							if (( $(wc -l < "$pathHWDR/ToReCheck.files") == 0 )); then
 								break
 							fi
 
-							cp -f --remove-destination "$pathWorkingDirectoryRAM/ToReCheck.files" "$pathWorkingDirectoryRAM/ToCheck.files" # TODO : move ???
-							echo -n '' >| "$pathWorkingDirectoryRAM/ToReCheck.files"
+							cp -f --remove-destination "$pathHWDR/ToReCheck.files" "$pathHWDR/ToCheck.files" # TODO : move ???
+							echo -n '' >| "$pathHWDR/ToReCheck.files"
 						done
+
+						unset index
 					fi
 
 					sleep 1
-					cat "$pathWorkingDirectory/Updated1-"{1..9}".files" >| "$pathWorkingDirectoryRAM/ToCheck.files"
-					sed -ir 's/^ *[0-9]\+ //' "$pathWorkingDirectoryRAM/ToCheck.files"
-					echo -n '' >| "$pathWorkingDirectoryRAM/ToReCheck.files"
+					cat "$pathHWDD/Updated1-"{1..9}".files" >| "$pathHWDR/ToCheck.files"
+					sed -ir 's/^ *[0-9]\+ //' "$pathHWDR/ToCheck.files"
+					echo -n '' >| "$pathHWDR/ToReCheck.files"
 
-					makeSectionStatusDone "Step_3-Checksum-$SizeIndex" $hostBackuped
+					unset sizeLimit offsetSize sizeLimitText
+
+					makeSectionStatusDoneX "Step_3-Checksum-$sizeIndex" $hostBackuped
 				done
+
+				unset sizeIndex
 			fi
 			# TODO : remove ToCheck.files ??
 
-			makeSectionStatusDone 'Step_3-Checksum' $hostBackuped
+			makeSectionStatusDoneX 'Step_3-Checksum' $hostBackuped
 		fi
 
-		makeSectionStatusDone 'Step_3' $hostBackuped
+		makeSectionStatusDoneX 'Step_3' $hostBackuped
 	fi
 
 # 	rm -f "${FilesListRAM}_${hostBackuped}_Removed"
 
-
-
-################################################################################
-################################################################################
-####                                                                        ####
-####     STEP 4 : Make the backup for real now                              ####
-####                                                                        ####
-################################################################################
-################################################################################
+################################################################################################################################################################
+##                                                                                                                                                            ##
+##      Make the backup for real now (Step 4)                                                                                                                 ##
+##                                                                                                                                                            ##
+################################################################################################################################################################
 
 # 	PROGRESS_TOTAL_ITEM=0
 # 	PROGRESS_TOTAL_SIZE=1
@@ -2816,15 +2974,14 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 
 	if checkSectionStatus 'Step_4' $hostBackuped; then
+
+#==============================================================================================================================================================#
+#       Make some initialization                                                                                                                               #
+#==============================================================================================================================================================#
+
 		updateScreenCurrentAction 'Make the backup for real now...'
 
-
-
-#==============================================================================#
-#==     Initialize some used variables                                       ==#
-#==============================================================================#
-
-		echo -n '' >| "$pathWorkingDirectoryRAM/ToCheck.files"
+		echo -n '' >| "$pathHWDR/ToCheck.files"
 
 		if [ "$BRUTAL" -ne 0 ]; then
 			:
@@ -2836,8 +2993,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 			PROGRESS_CURRENT_FILESU_ITEM]=$(( FILE_UPDATED1] + FILE_UPDATED2] + FILE_ADDED] ))
 # 			PROGRESS_CURRENT_FILESU_SIZE]=$(( FILE_SIZE_UPDATED1] + FILE_SIZE_UPDATED2] + FILE_SIZE_ADDED] ))
 		else
-			cat "$pathWorkingDirectory/Updated1-"{1..9}".files" "$pathWorkingDirectory/Updated2-"{1..9}".files" "$pathWorkingDirectory/Added-"{1..9}".files" > "$pathWorkingDirectoryRAM/ToBackup.files"
-			sed -ir 's/^ *[0-9]\+ //' "$pathWorkingDirectoryRAM/ToBackup.files"
+			cat "$pathHWDD/Updated1-"{1..9}".files" "$pathHWDD/Updated2-"{1..9}".files" "$pathHWDD/Added-"{1..9}".files" > "$pathHWDR/ToBackup.files"
+			sed -ir 's/^ *[0-9]\+ //' "$pathHWDR/ToBackup.files"
 # 			cp -f --remove-destination "${FilesListRAM}_${hostBackuped}_Updated2" "${FilesListRAM}_${hostBackuped}_ToBackup"
 # 			cat "${FilesListRAM}_${hostBackuped}_Updated1" >> "${FilesListRAM}_${hostBackuped}_ToBackup"
 # 			cat "${FilesListRAM}_${hostBackuped}_Added" >> "${FilesListRAM}_${hostBackuped}_ToBackup"
@@ -2860,8 +3017,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 			getPercentageV step4_P_PercentFilesAdded $step4_P_CountFilesAdded $step1_CountFilesAdded
 			getPercentageV step4_P_PercentSizeAdded  $step4_P_CountSizeAdded  $step1_CountSizeAdded
 
-			echoStatPercent $step4_R_CountFilesAdded $step4_R_CountSizeAdded "$posAdded1" "$S_NOLBL" "$step4_R_PercentFilesAdded" "$step4_R_PercentSizeAdded"
-			echoStatPercent $step4_P_CountFilesAdded $step4_P_CountSizeAdded "$posAdded2" "$S_NOLBL" "$step4_P_PercentFilesAdded" "$step4_P_PercentSizeAdded"
+			echoStatPercent $step4_R_CountFilesAdded $step4_R_CountSizeAdded "$POS_ADDED_1" "$S_NOLBL" "$step4_R_PercentFilesAdded" "$step4_R_PercentSizeAdded"
+			echoStatPercent $step4_P_CountFilesAdded $step4_P_CountSizeAdded "$POS_ADDED_2" "$S_NOLBL" "$step4_P_PercentFilesAdded" "$step4_P_PercentSizeAdded"
 
 			declare -i step4_T_CountFilesUpdated=$(( step1_CountFilesUpdated1 + step1_CountFilesUpdated2 ))
 			declare -i step4_T_CountSizeUpdated=$step1_CountSizeUpdated1
@@ -2878,15 +3035,15 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 			getPercentageV step4_P_PercentFilesUpdated $step4_P_CountFilesUpdated $step4_T_CountFilesUpdated
 			getPercentageV step4_P_PercentSizeUpdated  $step4_P_CountSizeUpdated  $step4_T_CountSizeUpdated
 
-			echoStatPercent $step4_R_CountFilesUpdated $step4_R_CountSizeUpdated "$posUpdated1" "$S_NOYEL" "$step4_R_PercentFilesUpdated" "$step4_R_PercentSizeUpdated"
-			echoStatPercent $step4_P_CountFilesUpdated $step4_P_CountSizeUpdated "$posUpdated2" "$S_NOYEL" "$step4_P_PercentFilesUpdated" "$step4_P_PercentSizeUpdated"
+			echoStatPercent $step4_R_CountFilesUpdated $step4_R_CountSizeUpdated "$POS_UPDATED_1" "$S_NOYEL" "$step4_R_PercentFilesUpdated" "$step4_R_PercentSizeUpdated"
+			echoStatPercent $step4_P_CountFilesUpdated $step4_P_CountSizeUpdated "$POS_UPDATED_2" "$S_NOYEL" "$step4_P_PercentFilesUpdated" "$step4_P_PercentSizeUpdated"
 
 		fi
 
 # 		PROGRESS_CURRENT_ITEM=0
 # 		PROGRESS_CURRENT_SIZE=0
 
-		if [ "$BRUTAL" -ne 0 ]; then
+		if [ "$BRUTAL" -ne 0 ]; then	# TODO
 			r='r'
 			Exclude="--exclude-from=\"${ExcludeList}_BravoTower\""
 		else
@@ -2900,61 +3057,63 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 		(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 "${A_EMPTY_TAG}" '')") ))
 
-		lineIndex=7
+# 		lineIndex=7
 
-# 		declare posAdded2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 4) )))"
-# 		declare posUpdated2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 3) )))"
+# 		declare POS_ADDED_2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 4) )))"
+# 		declare POS_UPDATED_2="$(getCSI_CursorMove Position $lineIndex $(( 1 + (25 * 3) )))"
 # 		posFilename="$(getCSI_CursorMove Position $(( lineIndex + 4)) 1 )"
 
+#==============================================================================================================================================================#
+#       Backup all files that need it                                                                                                                          #
+#==============================================================================================================================================================#
 
+		declare -i sizeIndex
 
-#==============================================================================#
-#==     Backup all files in the backup files list                            ==#
-#==============================================================================#
-
-		for SizeIndex in {1..5}; do
+		for sizeIndex in {1..5}; do
 
 			((	stepA_P_CountFilesChecked = 0,	stepA_P_CountSizeChecked = 0,
 				stepA_R_CountFilesChecked = 0,	stepA_R_CountSizeChecked = 0,
 				stepA_T_CountFilesChecked = 0,	stepA_T_CountSizeChecked = 0	)) || :
 
-			echoStat $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$posChecked1" "$S_NOYEL"
-			echoStat $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$posChecked2" "$S_NOYEL"
+			echoStat $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$POS_CHECKED_1" "$S_NOYEL"
+			echoStat $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$POS_CHECKED_2" "$S_NOYEL"
 
-			if ! checkSectionStatus "Step_4-$SizeIndex" $hostBackuped; then
+			if ! checkSectionStatus "Step_4-$sizeIndex" $hostBackuped; then
 				continue
 			fi
 
-			case $SizeIndex in
+			declare sizeLimit offsetSize sizeLimitText sleepDuration
+
+			case $sizeIndex in
 				1)
-					SizeLimit='--max-size=1MB-1'
-					OffsetSize='200'
-					SizeLimitText='<1MB'
-					sleep_duration="$(echo 'scale=4; 0.5/200' | bc)"
+					sizeLimit='--max-size=1MB-1'
+					offsetSize='200'
+					sizeLimitText='<1MB'
+					sleepDuration="$(echo 'scale=4; 0.5/200' | bc)"
 				;;
 				2)
-					SizeLimit='--min-size=1MB --max-size=10MB-1'
-					OffsetSize='40'
-					SizeLimitText='1MB ~ 10MB'
-					sleep_duration="$(echo 'scale=4; 1/40' | bc)"
+					sizeLimit='--min-size=1MB --max-size=10MB-1'
+					offsetSize='40'
+					sizeLimitText='1MB ~ 10MB'
+					sleepDuration="$(echo 'scale=4; 1/40' | bc)"
 				;;
 				3)
-					SizeLimit='--min-size=10MB --max-size=100MB-1'
-					OffsetSize='10'
-					SizeLimitText='10MB ~ 100MB'
-					sleep_duration="$(echo 'scale=4; 1/10' | bc)"
+					sizeLimit='--min-size=10MB --max-size=100MB-1'
+					offsetSize='10'
+					sizeLimitText='10MB ~ 100MB'
+					sleepDuration="$(echo 'scale=4; 1/10' | bc)"
 				;;
 				4)
-					SizeLimit='--min-size=100MB --max-size=1GB-1'
-					OffsetSize='5'
-					SizeLimitText='100MB ~ 1GB'
-					sleep_duration="$(echo 'scale=4; 1.5/5' | bc)"
+					sizeLimit='--min-size=100MB --max-size=1GB-1'
+					offsetSize='5'
+					sizeLimitText='100MB ~ 1GB'
+					sleepDuration="$(echo 'scale=4; 1.5/5' | bc)"
 				;;
 				5)
-					SizeLimit='--min-size=1GB'
-					OffsetSize='1'
-					SizeLimitText='>1GB'
-					sleep_duration='2'
+					sizeLimit='--min-size=1GB'
+					offsetSize='1'
+					sizeLimitText='>1GB'
+					sleepDuration='2'
 				;;
 			esac
 
@@ -2973,33 +3132,36 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 #
 # 			if [ "$BRUTAL" -ne 0 ]; then
 # 				:
-# # 				progress="${S_BOWHI}>>>${S_R_AL} ${S_NOYEL}${TB__RED} BRUTAL ${S_R_AL} $rotationStatus ($hostBackuped) Make the backup for real ($SizeLimitText) : ${S_NOWHI}${PROGRESS_CURRENT_ITEM]}${S_R_AL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${S_NOGRE}${PROGRESS_CURRENT_FILESA_ITEM]} ${S_DA}$P_BackupProgressFilesAItem${S_R_AL} ($size_added ${S_NOGRE}${S_DA}$P_BackupProgressFilesASize${S_R_AL}) - ${S_NOYEL}${PROGRESS_CURRENT_FILESU_ITEM]} ${S_DA}$P_BackupProgressFilesUItem${S_R_AL} ($size_updated ${S_NOYEL}${S_DA}$P_BackupProgressFilesUSize${S_R_AL})"
+# # 				progress="${S_BOWHI}>>>${S_R_AL} ${S_NOYEL}${TB__RED} BRUTAL ${S_R_AL} $rotationStatus ($hostBackuped) Make the backup for real ($sizeLimitText) : ${S_NOWHI}${PROGRESS_CURRENT_ITEM]}${S_R_AL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${S_NOGRE}${PROGRESS_CURRENT_FILESA_ITEM]} ${S_DA}$P_BackupProgressFilesAItem${S_R_AL} ($size_added ${S_NOGRE}${S_DA}$P_BackupProgressFilesASize${S_R_AL}) - ${S_NOYEL}${PROGRESS_CURRENT_FILESU_ITEM]} ${S_DA}$P_BackupProgressFilesUItem${S_R_AL} ($size_updated ${S_NOYEL}${S_DA}$P_BackupProgressFilesUSize${S_R_AL})"
 # 			else
-# 				progress="${S_BOWHI}>>>${S_R_AL} $rotationStatus ($hostBackuped) Make the backup for real ($SizeLimitText) : ${S_NOWHI}${PROGRESS_CURRENT_ITEM}${S_R_AL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${S_NOLBL}${PROGRESS_CURRENT_FILESA_ITEM} ${S_NOBLU}$P_BackupProgressFilesAItem${S_R_AL} ($size_added ${S_NOBLU}$P_BackupProgressFilesASize${S_R_AL}) - ${S_NOYEL}${PROGRESS_CURRENT_FILESU_ITEM} ${S_DA}$P_BackupProgressFilesUItem${S_R_AL} ($size_updated ${S_NOYEL}${S_DA}$P_BackupProgressFilesUSize${S_R_AL})"
+# 				progress="${S_BOWHI}>>>${S_R_AL} $rotationStatus ($hostBackuped) Make the backup for real ($sizeLimitText) : ${S_NOWHI}${PROGRESS_CURRENT_ITEM}${S_R_AL} $P_BackupProgressItem ($size_total $P_BackupProgressSize) - ${S_NOLBL}${PROGRESS_CURRENT_FILESA_ITEM} ${S_NOBLU}$P_BackupProgressFilesAItem${S_R_AL} ($size_added ${S_NOBLU}$P_BackupProgressFilesASize${S_R_AL}) - ${S_NOYEL}${PROGRESS_CURRENT_FILESU_ITEM} ${S_DA}$P_BackupProgressFilesUItem${S_R_AL} ($size_updated ${S_NOYEL}${S_DA}$P_BackupProgressFilesUSize${S_R_AL})"
 # 			fi
 #
 # 			echo -ne "$Time $progress\r"
 
 # 			lastAction=0
-			lastTime=0
+# 			lastTime=0
 
-			if checkSectionStatus "Step_4-$SizeIndex-Rsync" $hostBackuped; then
+			if checkSectionStatus "Step_4-$sizeIndex-Rsync" $hostBackuped; then
 
 # 				PROGRESS2_TOTAL_ITEM=0
 # 				PROGRESS2_TOTAL_SIZE=0
 
-				echo -n '' >| "$pathWorkingDirectoryRAM/ToCheck.files"
+				echo -n '' >| "$pathHWDR/ToCheck.files"
 
-				while read -u ${canal} Line; do
-					if [[ "${Line:0:1}" != '>' ]]; then
+				declare fileData filename fileType fileAction actionFlags
+				declare canal fileSize	# TODO Need to become -i
+
+				while read -u ${canal} fileData; do
+					if [[ "${fileData:0:1}" != '>' ]]; then
 						continue
 					fi
 
-					filename="${Line:27}"
-					size="${Line:2:12}"
+					filename="${fileData:27}"
+					fileSize="${fileData:2:12}"
 
 					if [[ "${filename:(-1)}" != '/' ]]; then
-						if [[ "${Line:16:1}" == 'L' ]]; then
+						if [[ "${fileData:16:1}" == 'L' ]]; then
 							IsFile=0
 							TypeColor="${S_IT}"
 						else
@@ -3015,11 +3177,11 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 						TypeColor="${S_DA}"
 					fi
 
-					ActionUpdateType="${Line:15:1}"
-					ActionFlags="${Line:17:9}"
+					fileAction="${fileData:15:1}"
+					actionFlags="${fileData:17:9}"
 
-					if [[ "$ActionUpdateType" == '.' ]]; then
-						if [[ "$ActionFlags" == '         ' ]]; then
+					if [[ "$fileAction" == '.' ]]; then
+						if [[ "$actionFlags" == '         ' ]]; then
 # 							if [[ $lastAction -ne 1 ]]; then # 1 = UpToDate
 # 								Action="$A_UP_TO_DATE_G"
 # 								Flags='      '
@@ -3031,7 +3193,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 							if [[ $IsDirectory -ne 1 ]]; then
 # 								if [[ "$BRUTAL" -ne 0 ]]; then
 # 									(( PROGRESS_CURRENT_FILESA_SIZE -= size, --PROGRESS_CURRENT_FILESA_ITEM, PROGRESS_CURRENT_SIZE += size, ++PROGRESS_CURRENT_ITEM, PROGRESS2_TOTAL_SIZE += size, ++PROGRESS2_TOTAL_ITEM ))
-# 									echo "$filename" >> "$pathWorkingDirectoryRAM/ToCheck.files"
+# 									echo "$filename" >> "$pathHWDR/ToCheck.files"
 # 								else
 # 									continue
 # 								fi
@@ -3046,17 +3208,17 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 								lastAction=2
 # 							fi
 
-							ActionFlags="${ActionFlags//./ }"
-							getUpdateFlagsV 'Flags' "$ActionFlags"
+							actionFlags="${actionFlags//./ }"
+							getUpdateFlagsV Flags "$actionFlags"	# TODO
 
-							if [[ $IsDirectory -ne 1 ]]; then
+# 							if [[ $IsDirectory -ne 1 ]]; then
 								((	--step4_R_CountFilesUpdated, ++step4_P_CountFilesUpdated,
-									stepA_R_CountSizeTotal -= size, --stepA_R_CountFilesTotal,
-									stepA_P_CountSizeTotal += size, ++stepA_P_CountFilesTotal	))
+									stepA_R_CountSizeTotal -= fileSize, --stepA_R_CountFilesTotal,
+									stepA_P_CountSizeTotal += fileSize, ++stepA_P_CountFilesTotal	))
 
 # 								if [[ "$BRUTAL" -ne 0 ]]; then
 # 									(( PROGRESS2_TOTAL_SIZE += size, ++PROGRESS2_TOTAL_ITEM ))
-# 									echo "$filename" >> "$pathWorkingDirectoryRAM/ToCheck.files"
+# 									echo "$filename" >> "$pathHWDR/ToCheck.files"
 # 								fi
 
 								getPercentageV step4_R_PercentFilesUpdated $step4_R_CountFilesUpdated $step4_T_CountFilesUpdated
@@ -3065,8 +3227,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 								getPercentageV step4_P_PercentFilesUpdated $step4_P_CountFilesUpdated $step4_T_CountFilesUpdated
 								getPercentageV step4_P_PercentSizeUpdated  $step4_P_CountSizeUpdated  $step4_T_CountSizeUpdated
 
-								echoStatPercent $step4_R_CountFilesUpdated $step4_R_CountSizeUpdated "$posUpdated1" "$S_NOYEL" "$step4_R_PercentFilesUpdated" "$step4_R_PercentSizeUpdated"
-								echoStatPercent $step4_P_CountFilesUpdated $step4_P_CountSizeUpdated "$posUpdated2" "$S_NOYEL" "$step4_P_PercentFilesUpdated" "$step4_P_PercentSizeUpdated"
+								echoStatPercent $step4_R_CountFilesUpdated $step4_R_CountSizeUpdated "$POS_UPDATED_1" "$S_NOYEL" "$step4_R_PercentFilesUpdated" "$step4_R_PercentSizeUpdated"
+								echoStatPercent $step4_P_CountFilesUpdated $step4_P_CountSizeUpdated "$POS_UPDATED_2" "$S_NOYEL" "$step4_P_PercentFilesUpdated" "$step4_P_PercentSizeUpdated"
 
 								getPercentageV stepA_R_PercentFilesTotal $stepA_R_CountFilesTotal $step1_CountFilesTotal
 								getPercentageV stepA_R_PercentSizeTotal  $stepA_R_CountSizeTotal  $step1_CountSizeTotal
@@ -3074,14 +3236,14 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 								getPercentageV stepA_P_PercentFilesTotal $stepA_P_CountFilesTotal $step1_CountFilesTotal
 								getPercentageV stepA_P_PercentSizeTotal  $stepA_P_CountSizeTotal  $step1_CountSizeTotal
 
-								echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$posTotal1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
-								echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$posTotal2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
+								echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$POS_TOTAL_1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
+								echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$POS_TOTAL_2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
 
-								echoFilename "/$filename" $size "$A_UPDATED_Y" "$S_NOYEL"
-							fi
+								echoFilename "/$filename" $fileSize "$A_UPDATED_Y" "$S_NOYEL"
+# 							fi
 						fi
 					else
-						if [[ "$ActionFlags" == '+++++++++' ]]; then
+						if [[ "$actionFlags" == '+++++++++' ]]; then
 # 							if [[ $lastAction -ne 6 ]]; then # 6 = Added
 # 								Action="$A_ADDED_B"
 #
@@ -3091,19 +3253,19 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 								lastAction=6
 # 							fi
 
-							if [[ $IsDirectory -ne 1 ]]; then
+# 							if [[ $IsDirectory -ne 1 ]]; then
 # 								if [[ "$BRUTAL" -ne 0 ]]; then
 # 									(( PROGRESS_CURRENT_FILESU_SIZE -= size, --PROGRESS_CURRENT_FILESU_ITEM, PROGRESS_CURRENT_SIZE += size, ++PROGRESS_CURRENT_ITEM, PROGRESS2_TOTAL_SIZE += size, ++PROGRESS2_TOTAL_ITEM ))
 # 								else
 # 								fi
-								((	step4_R_CountSizeAdded -= size,   --step4_R_CountFilesAdded,
-									step4_P_CountSizeAdded += size,   ++step4_P_CountFilesAdded,
-									stepA_R_CountSizeChecked += size, ++stepA_R_CountFilesChecked,
-									stepA_T_CountSizeChecked += size, ++stepA_T_CountFilesChecked,
-									stepA_R_CountSizeTotal -= size,   --stepA_R_CountFilesTotal,
-									stepA_P_CountSizeTotal += size,   ++stepA_P_CountFilesTotal	))
+								((	step4_R_CountSizeAdded -= fileSize,   --step4_R_CountFilesAdded,
+									step4_P_CountSizeAdded += fileSize,   ++step4_P_CountFilesAdded,
+									stepA_R_CountSizeChecked += fileSize, ++stepA_R_CountFilesChecked,
+									stepA_T_CountSizeChecked += fileSize, ++stepA_T_CountFilesChecked,
+									stepA_R_CountSizeTotal -= fileSize,   --stepA_R_CountFilesTotal,
+									stepA_P_CountSizeTotal += fileSize,   ++stepA_P_CountFilesTotal	))
 
-								echo "$filename" >> "$pathWorkingDirectoryRAM/ToCheck.files"
+								echo "$filename" >> "$pathHWDR/ToCheck.files"
 
 								getPercentageV step4_R_PercentFilesAdded $step4_R_CountFilesAdded $step1_CountFilesAdded
 								getPercentageV step4_R_PercentSizeAdded  $step4_R_CountSizeAdded  $step1_CountSizeAdded
@@ -3111,8 +3273,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 								getPercentageV step4_P_PercentFilesAdded $step4_P_CountFilesAdded $step1_CountFilesAdded
 								getPercentageV step4_P_PercentSizeAdded  $step4_P_CountSizeAdded  $step1_CountSizeAdded
 
-								echoStatPercent $step4_R_CountFilesAdded $step4_R_CountSizeAdded "$posAdded1" "$S_NOLBL" "$step4_R_PercentFilesAdded" "$step4_R_PercentSizeAdded"
-								echoStatPercent $step4_P_CountFilesAdded $step4_P_CountSizeAdded "$posAdded2" "$S_NOLBL" "$step4_P_PercentFilesAdded" "$step4_P_PercentSizeAdded"
+								echoStatPercent $step4_R_CountFilesAdded $step4_R_CountSizeAdded "$POS_ADDED_1" "$S_NOLBL" "$step4_R_PercentFilesAdded" "$step4_R_PercentSizeAdded"
+								echoStatPercent $step4_P_CountFilesAdded $step4_P_CountSizeAdded "$POS_ADDED_2" "$S_NOLBL" "$step4_P_PercentFilesAdded" "$step4_P_PercentSizeAdded"
 
 								getPercentageV stepA_R_PercentFilesChecked $stepA_R_CountFilesChecked $stepA_T_CountFilesChecked
 								getPercentageV stepA_R_PercentSizeChecked  $stepA_R_CountSizeChecked  $stepA_T_CountSizeChecked
@@ -3120,8 +3282,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 								getPercentageV stepA_P_PercentFilesChecked $stepA_P_CountFilesChecked $stepA_T_CountFilesChecked
 								getPercentageV stepA_P_PercentSizeChecked  $stepA_P_CountSizeChecked  $stepA_T_CountSizeChecked
 
-								echoStatPercent $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$posChecked1" "$S_NOYEL" "$stepA_R_PercentFilesChecked" "$stepA_R_PercentSizeChecked"
-								echoStatPercent $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$posChecked2" "$S_NOYEL" "$stepA_P_PercentFilesChecked" "$stepA_P_PercentSizeChecked"
+								echoStatPercent $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$POS_CHECKED_1" "$S_NOYEL" "$stepA_R_PercentFilesChecked" "$stepA_R_PercentSizeChecked"
+								echoStatPercent $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$POS_CHECKED_2" "$S_NOYEL" "$stepA_P_PercentFilesChecked" "$stepA_P_PercentSizeChecked"
 
 								getPercentageV stepA_R_PercentFilesTotal $stepA_R_CountFilesTotal $step1_CountFilesTotal
 								getPercentageV stepA_R_PercentSizeTotal  $stepA_R_CountSizeTotal  $step1_CountSizeTotal
@@ -3129,11 +3291,11 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 								getPercentageV stepA_P_PercentFilesTotal $stepA_P_CountFilesTotal $step1_CountFilesTotal
 								getPercentageV stepA_P_PercentSizeTotal  $stepA_P_CountSizeTotal  $step1_CountSizeTotal
 
-								echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$posTotal1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
-								echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$posTotal2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
+								echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$POS_TOTAL_1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
+								echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$POS_TOTAL_2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
 
-								echoFilename "/$filename" $size "$A_ADDED_B" "$S_NOLBL"
-							fi
+								echoFilename "/$filename" $fileSize "$A_ADDED_B" "$S_NOLBL"
+# 							fi
 						else
 # 							if [[ $lastAction -ne 3 ]]; then # 3 = Updated without flags
 # 								Action="$A_UPDATED_Y"
@@ -3144,14 +3306,14 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 								lastAction=3
 # 							fi
 
-							((	step4_R_CountSizeUpdated -= size,   --step4_R_CountFilesUpdated,
-								step4_P_CountSizeUpdated += size,   ++step4_P_CountFilesUpdated,
-								stepA_R_CountSizeChecked += size, ++stepA_R_CountFilesChecked,
-								stepA_T_CountSizeChecked += size, ++stepA_T_CountFilesChecked,
-								stepA_R_CountSizeTotal -= size,   --stepA_R_CountFilesTotal,
-								stepA_P_CountSizeTotal += size,   ++stepA_P_CountFilesTotal	))
+							((	step4_R_CountSizeUpdated -= fileSize,   --step4_R_CountFilesUpdated,
+								step4_P_CountSizeUpdated += fileSize,   ++step4_P_CountFilesUpdated,
+								stepA_R_CountSizeChecked += fileSize, ++stepA_R_CountFilesChecked,
+								stepA_T_CountSizeChecked += fileSize, ++stepA_T_CountFilesChecked,
+								stepA_R_CountSizeTotal -= fileSize,   --stepA_R_CountFilesTotal,
+								stepA_P_CountSizeTotal += fileSize,   ++stepA_P_CountFilesTotal	))
 
-							echo "$filename" >> "$pathWorkingDirectoryRAM/ToCheck.files"
+							echo "$filename" >> "$pathHWDR/ToCheck.files"
 
 							getPercentageV step4_R_PercentFilesUpdated $step4_R_CountFilesUpdated $step4_T_CountFilesUpdated
 							getPercentageV step4_R_PercentSizeUpdated  $step4_R_CountSizeUpdated  $step4_T_CountSizeUpdated
@@ -3159,8 +3321,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 							getPercentageV step4_P_PercentFilesUpdated $step4_P_CountFilesUpdated $step4_T_CountFilesUpdated
 							getPercentageV step4_P_PercentSizeUpdated  $step4_P_CountSizeUpdated  $step4_T_CountSizeUpdated
 
-							echoStatPercent $step4_R_CountFilesUpdated $step4_R_CountSizeUpdated "$posUpdated1" "$S_NOYEL" "$step4_R_PercentFilesUpdated" "$step4_R_PercentSizeUpdated"
-							echoStatPercent $step4_P_CountFilesUpdated $step4_P_CountSizeUpdated "$posUpdated2" "$S_NOYEL" "$step4_P_PercentFilesUpdated" "$step4_P_PercentSizeUpdated"
+							echoStatPercent $step4_R_CountFilesUpdated $step4_R_CountSizeUpdated "$POS_UPDATED_1" "$S_NOYEL" "$step4_R_PercentFilesUpdated" "$step4_R_PercentSizeUpdated"
+							echoStatPercent $step4_P_CountFilesUpdated $step4_P_CountSizeUpdated "$POS_UPDATED_2" "$S_NOYEL" "$step4_P_PercentFilesUpdated" "$step4_P_PercentSizeUpdated"
 
 							getPercentageV stepA_R_PercentFilesChecked $stepA_R_CountFilesChecked $stepA_T_CountFilesChecked
 							getPercentageV stepA_R_PercentSizeChecked  $stepA_R_CountSizeChecked  $stepA_T_CountSizeChecked
@@ -3168,8 +3330,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 							getPercentageV stepA_P_PercentFilesChecked $stepA_P_CountFilesChecked $stepA_T_CountFilesChecked
 							getPercentageV stepA_P_PercentSizeChecked  $stepA_P_CountSizeChecked  $stepA_T_CountSizeChecked
 
-							echoStatPercent $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$posChecked1" "$S_NOYEL" "$stepA_R_PercentFilesChecked" "$stepA_R_PercentSizeChecked"
-							echoStatPercent $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$posChecked2" "$S_NOYEL" "$stepA_P_PercentFilesChecked" "$stepA_P_PercentSizeChecked"
+							echoStatPercent $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$POS_CHECKED_1" "$S_NOYEL" "$stepA_R_PercentFilesChecked" "$stepA_R_PercentSizeChecked"
+							echoStatPercent $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$POS_CHECKED_2" "$S_NOYEL" "$stepA_P_PercentFilesChecked" "$stepA_P_PercentSizeChecked"
 
 							getPercentageV stepA_R_PercentFilesTotal $stepA_R_CountFilesTotal $step1_CountFilesTotal
 							getPercentageV stepA_R_PercentSizeTotal  $stepA_R_CountSizeTotal  $step1_CountSizeTotal
@@ -3177,18 +3339,20 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 							getPercentageV stepA_P_PercentFilesTotal $stepA_P_CountFilesTotal $step1_CountFilesTotal
 							getPercentageV stepA_P_PercentSizeTotal  $stepA_P_CountSizeTotal  $step1_CountSizeTotal
 
-							echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$posTotal1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
-							echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$posTotal2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
+							echoStatPercent $stepA_R_CountFilesTotal $stepA_R_CountSizeTotal "$POS_TOTAL_1" "$S_NOWHI" "$stepA_R_PercentFilesTotal" "$stepA_R_PercentSizeTotal"
+							echoStatPercent $stepA_P_CountFilesTotal $stepA_P_CountSizeTotal "$POS_TOTAL_2" "$S_NOWHI" "$stepA_P_PercentFilesTotal" "$stepA_P_PercentSizeTotal"
 
-							echoFilename "/$filename" $size "$A_UPDATED_Y" "$S_NOYEL"
+							echoFilename "/$filename" $fileSize "$A_UPDATED_Y" "$S_NOYEL"
 						fi
-						lastTime=0
+# 						lastTime=0
 					fi
-				done {canal}< <(rsync -vvi${r}tpoglDm --files-from="$pathWorkingDirectoryRAM/ToBackup.files" $Exclude --modify-window=5 -M--munge-links \
-							--preallocate --inplace --no-whole-file $SizeLimit $compress_details \
+				done {canal}< <(rsync -vvi${r}tpoglDm --files-from="$pathHWDR/ToBackup.files" $Exclude --modify-window=5 -M--munge-links \
+							--preallocate --inplace --no-whole-file $sizeLimit $compressConfig \
 							--info=name2,backup,del,copy --out-format="> %12l %i %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/")
 
-				echo -n '' >| "$pathWorkingDirectoryRAM/ToReCheck.files"
+				unset canal fileData filename fileType fileAction actionFlags fileSize
+
+				echo -n '' >| "$pathHWDR/ToReCheck.files"
 
 # 				(( PROGRESS2_CURRENT_ITEM = 0, PROGRESS2_CURRENT_SIZE = 0, PROGRESS2_CURRENT_FILES_ITEM = PROGRESS2_TOTAL_ITEM, PROGRESS2_CURRENT_FILES_SIZE = PROGRESS2_TOTAL_SIZE , 1 ))
 
@@ -3198,14 +3362,12 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 					progress=''
 # 				fi
 
-				makeSectionStatusDone "Step_4-${SizeIndex}-Rsync" $hostBackuped
+				makeSectionStatusDoneX "Step_4-${sizeIndex}-Rsync" $hostBackuped
 			fi
 
-
-
-#==============================================================================#
-#==     Check integrity of files copied or modified in the backup            ==#
-#==============================================================================#
+#==============================================================================================================================================================#
+#       Check integrity of files copied or modified while the backup process                                                                                   #
+#==============================================================================================================================================================#
 
 			if (( stepA_R_CountFilesChecked > 0 )); then
 
@@ -3223,42 +3385,49 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 # 				echo -ne "$Time $progress -- -- -- Checksum (?) : ${S_NORED}${PROGRESS2_CURRENT_RESENDED}${S_R_AL} ${S_NOGRE}${PROGRESS2_CURRENT_ITEM}${S_R_AL} $P_ChecksumProgressItem ($Size1 $P_ChecksumProgressSize) - ${S_NOYEL}${PROGRESS2_CURRENT_FILES_ITEM}${S_R_AL} $P_ChecksumProgressFilesItem ($Size2 $P_ChecksumProgressFilesSize)\r"
 
-				for Index in {1..10}; do
+				declare -i index
+
+				for index in {1..10}; do
 					freeCache > /dev/null
 					ssh $hostBackuped 'freeCache > /dev/null'
 
 # 					PROGRESS2_CURRENT_RESENDED=0
 
-					Offset=1
+					declare -i offset=1
+
 					while [[ 1 ]]; do
-						if ! checkSectionStatus "Step_4-$SizeIndex-Checksum_$Index-$Offset" $hostBackuped; then
-							Offset=$(( Offset + OffsetSize ))
+						if ! checkSectionStatus "Step_4-$sizeIndex-Checksum_$index-$offset" $hostBackuped; then
+							offset=$(( offset + offsetSize ))
 							continue
 						fi
 
-						tail -qn +$Offset "$pathWorkingDirectoryRAM/ToCheck.files" | head -qn $OffsetSize >| "$pathWorkingDirectoryRAM/ToCheck-Offset.files"
-						LineCount="$(wc -l < "$pathWorkingDirectoryRAM/ToCheck-Offset.files")"
+						tail -qn +$offset "$pathHWDR/ToCheck.files" | head -qn $offsetSize >| "$pathHWDR/ToCheck-offset.files"
+						declare -i lineCount="$(wc -l < "$pathHWDR/ToCheck-offset.files")"
 
-						if (( LineCount == 0 )); then
+						if (( lineCount == 0 )); then
 							break
 						fi
 
+						unset lineCount
 # 						lastAction=0
 
-						while read -u ${canal} Line; do
-							if [[ "${Line:0:1}" != '>' ]]; then
+						declare fileData filename fileType fileAction
+						declare canal fileSize	# TODO Need to become -i
+
+						while read -u ${canal} fileData; do
+							if [[ "${fileData:0:1}" != '>' ]]; then
 								continue
 							fi
 
-							filename="${Line:27}"
+							filename="${fileData:27}"
 
 							if [[ "${filename:(-1)}" == '/' ]]; then
 								continue
 							fi
 
-							size="${Line:2:12}"
+							fileSize="${fileData:2:12}"
 
-							if [[ "${Line:16:1}" == 'L' ]]; then
+							if [[ "${fileData:16:1}" == 'L' ]]; then
 								IsFile=0
 								TypeColor="${S_IT}"
 							else
@@ -3266,9 +3435,9 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 								TypeColor=''
 							fi
 
-							ActionUpdateType="${Line:15:1}"
+							fileAction="${fileData:15:1}"
 
-							if [[ "$ActionUpdateType" == '.' ]]; then
+							if [[ "$fileAction" == '.' ]]; then
 # 								if [[ $lastAction -ne 1 ]]; then # 1 = Successed
 # 									Action="$A_SUCCESSED"
 #
@@ -3277,8 +3446,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 									lastAction=1
 # 								fi
 
-								((	stepA_R_CountSizeChecked -= size,  --stepA_R_CountFilesChecked,
-									stepA_P_CountSizeChecked += size,  ++stepA_P_CountFilesChecked	))
+								((	stepA_R_CountSizeChecked -= fileSize,  --stepA_R_CountFilesChecked,
+									stepA_P_CountSizeChecked += fileSize,  ++stepA_P_CountFilesChecked	))
 
 								getPercentageV stepA_R_PercentFilesChecked $stepA_R_CountFilesChecked $stepA_T_CountFilesChecked
 								getPercentageV stepA_R_PercentSizeChecked  $stepA_R_CountSizeChecked  $stepA_T_CountSizeChecked
@@ -3286,10 +3455,10 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 								getPercentageV stepA_P_PercentFilesChecked $stepA_P_CountFilesChecked $stepA_T_CountFilesChecked
 								getPercentageV stepA_P_PercentSizeChecked  $stepA_P_CountSizeChecked  $stepA_T_CountSizeChecked
 
-								echoStatPercent $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$posChecked1" "$S_NOYEL" "$stepA_R_PercentFilesChecked" "$stepA_R_PercentSizeChecked"
-								echoStatPercent $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$posChecked2" "$S_NOYEL" "$stepA_P_PercentFilesChecked" "$stepA_P_PercentSizeChecked"
+								echoStatPercent $stepA_R_CountFilesChecked $stepA_R_CountSizeChecked "$POS_CHECKED_1" "$S_NOYEL" "$stepA_R_PercentFilesChecked" "$stepA_R_PercentSizeChecked"
+								echoStatPercent $stepA_P_CountFilesChecked $stepA_P_CountSizeChecked "$POS_CHECKED_2" "$S_NOYEL" "$stepA_P_PercentFilesChecked" "$stepA_P_PercentSizeChecked"
 
-								echoFilename "/$filename" $size "$A_SUCCESSED" "$S_NOGRE"
+								echoFilename "/$filename" $fileSize "$A_SUCCESSED" "$S_NOGRE"
 							else
 # 								if [[ $lastAction -ne 2 ]]; then # 2 = Resended
 # 									Action="$A_RESENDED"
@@ -3300,47 +3469,80 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 								fi
 
 # 								(( ++PROGRESS2_CURRENT_RESENDED ))
-								echo "$filename" >> "$pathWorkingDirectoryRAM/ToReCheck.files"
+								echo "$filename" >> "$pathHWDR/ToReCheck.files"
 
-								echoFilename "/$filename" $size "$A_RESENDED" "$S_NOYEL"
+								echoFilename "/$filename" $fileSize "$A_RESENDED" "$S_NOYEL"
 							fi
 
-							sleep $sleep_duration
-						done {canal}< <(rsync -vvitpoglDmc --files-from="$pathWorkingDirectoryRAM/ToCheck-Offset.files" --modify-window=5 \
-									--preallocate --inplace --no-whole-file --block-size=32768 $compress_details -M--munge-links \
+							sleep $sleepDuration
+						done {canal}< <(rsync -vvitpoglDmc --files-from="$pathHWDR/ToCheck-offset.files" --modify-window=5 \
+									--preallocate --inplace --no-whole-file --block-size=32768 $compressConfig -M--munge-links \
 									--info=name2,backup,del,copy --out-format="> %12l %i %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/")
 
-						makeSectionStatusDone "Step_4-$SizeIndex-Checksum_$Index-$Offset" $hostBackuped
+						unset canal fileData filename fileType fileAction actionFlags fileSize
+
+						makeSectionStatusDoneX "Step_4-$sizeIndex-Checksum_$index-$offset" $hostBackuped
 					done
 
-					if (( $(wc -l < "$pathWorkingDirectoryRAM/ToReCheck.files") == 0 )); then
+					unset offset
+
+					if (( $(wc -l < "$pathHWDR/ToReCheck.files") == 0 )); then
 						break
 					fi
 
-					cp --remove-destination "$pathWorkingDirectoryRAM/ToReCheck.files" "$pathWorkingDirectoryRAM/ToCheck.files"
-					echo -n '' >| "$pathWorkingDirectoryRAM/ToReCheck.files"
+					cp --remove-destination "$pathHWDR/ToReCheck.files" "$pathHWDR/ToCheck.files"
+					echo -n '' >| "$pathHWDR/ToReCheck.files"
 				done
 # 				PROGRESS2_CURRENT_RESENDED=0
 
+				unset index
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+				declare    fileData	# TODO filename ??
+				declare -i canal
+
 				(( stepA_R_CountFilesChecked > 0 )) && {
-					while read -u ${canal} Line; do
+					while read -u ${canal} fileData; do
 
 						((	--stepA_R_CountFilesChecked,
 							++stepA_P_CountFilesChecked	))
 
-						echoFilename "/$filename" 0 "$A_ABORTED_NR" "$S_NORED"
+						echoFilename "/$fileData" 0 "$A_ABORTED_NR" "$S_NORED"
 
-					done {canal}< <(cat "$pathWorkingDirectoryRAM/ToCheck.files")
+					done {canal}< <(cat "$pathHWDR/ToCheck.files")
 				}
 
+				unset canal fileData
+
 			fi
-			makeSectionStatusDone "Step_4-$SizeIndex" $hostBackuped
+			makeSectionStatusDoneX "Step_4-$sizeIndex" $hostBackuped
 		done
 
-		makeSectionStatusDone 'Step_4' $hostBackuped
+		unset sizeIndex
+		unset sizeLimit offsetSize sizeLimitText sleepDuration
+
+		unset step4_P_CountFilesAdded step4_R_CountFilesAdded step4_P_CountSizeAdded step4_R_CountSizeAdded
+		unset step4_P_PercentFilesAdded	step4_R_PercentFilesAdded step4_P_PercentSizeAdded step4_R_PercentSizeAdded
+		unset step4_T_CountFilesUpdated step4_T_CountSizeUpdated
+
+		unset step4_P_CountFilesUpdated step4_R_CountFilesUpdated step4_P_CountSizeUpdated step4_R_CountSizeUpdated
+		unset step4_P_PercentFilesUpdated step4_R_PercentFilesUpdated step4_P_PercentSizeUpdated step4_R_PercentSizeUpdated
+
+		makeSectionStatusDoneX 'Step_4' $hostBackuped
 	fi
 
-	echo
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	unset pathHWDD pathHWDR pathHWDS
+	unset compressConfig
+
+	unset step1_CountFilesTotal step1_CountSizeTotal step1_CountFilesAdded step1_CountSizeAdded step1_CountFilesUpdated1 step1_CountSizeUpdated1
+	unset step1_CountFilesUpdated2 step1_CountSizeUpdated2 step1_CountFilesRemoved step1_CountSizeRemoved step1_CountFilesExcluded step1_CountSizeExcluded
+	unset step1_CountFilesUptodate step1_CountSizeUptodate step1_CountFilesSkipped step1_CountSizeSkipped
+
+	unset stepA_P_CountFilesTotal stepA_R_CountFilesTotal stepA_P_CountSizeTotal stepA_R_CountSizeTotal
+	unset stepA_P_PercentFilesTotal	stepA_R_PercentFilesTotal stepA_P_PercentSizeTotal stepA_R_PercentSizeTotal
 done
 
 # backupWorkingDirectory
@@ -3452,6 +3654,46 @@ function __change_log__
 {
 	: << 'COMMENT'
 
+	Next Objectives :	- Cleanup all useless comments.
+						- Remove the openFilesListsSpliter function and write files in a single output file.
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	COMMIT - 27.07.2019
+		Summary : Verify deeply and fix missing `declare` and `unset` variables.
+
+		Details :	- Verify deeply and fix missing `declare` and `unset` variables.
+					- Correct some variables case.
+					- Work a bit on the "comments art" of source code sections and decorations.
+					- Start to redesigne the static working directory management.
+					- Most of "position" variables are now constants.
+					- Fix some little bugs.
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	27.07.2019
+		Main Source Code
+			- Fix : Recreate the late backup indicator that has unexpedly vanished. (??)
+			- Renamed compress_details variable to compressConfig.
+			- Most of "position" variables are now constants.
+			- Correct some variables case.
+			- Verify deeply and fix missing `declare` and `unset` variables.
+			- Fix a regressive bug with the regex that dectect folder type in second part of the step 2. (due to the output change of getFileTypeV function)
+			- Fix the size variable that should be fileSize.
+
+	26.07.2019
+		Main Source Code
+			- Fix : In the end of the check files loop of the step 4, fix a buf that output always the same filename.
+			- Make a "Script Initialization" section and group inside global constants and variables definitions.
+			- Start to redesigne the static working directory management.
+			- Add the makeSectionStatusDoneX function that hooks up to the genuine makeSectionStatusDone function.
+			- Work a bit on the "comments art" of source code sections and decorations.
+			- Fix : Remove the useless from now on rotationStatusSize variable.
+			- Verify and fix some missing `unset` variables.
+			- Removed the getHostWorkingDirectory function that is not really usefull.
+			- Rename variables pathWorkingDirectory -> pathHWDD and pathWorkingDirectoryRAM -> pathHWDR ("H"ost "W"orking "D"irectory "D"isk|"R"am)
+			- Added the pathHWDS variable ("H"ost "W"orking "D"irectory "S"tatic)
+
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
 	COMMIT - 26.07.2019
@@ -3459,12 +3701,9 @@ function __change_log__
 
 		Details :	- Removed a lot of useless functions.
 					- Redesigned the main rotation files loop. (rotateFolders function)
-					- Renameed all statistics variables in steps 1 to 4.
+					- Renamed all statistics variables in steps 1 to 4.
 					- Folders are now processed in a different way...
 					- Fix some little bugs.
-
-		Next Objectives :	- Cleanup all useless comments.
-							- Remove the openFilesListsSpliter function and write files in a single output file.
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
