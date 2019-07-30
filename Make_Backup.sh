@@ -12,7 +12,7 @@
 #	This script can backup some hosts each time and keep archive over time.	   #
 #																			   #
 ################################################################################
-#														23.03.2019 - 27.07.2019
+#														23.03.2019 - 30.07.2019
 
 PATH_INFRASTRUCTURES='/root/Infrastructures'
 
@@ -190,7 +190,7 @@ function getIsExcludedV()
 	local excluded_path excluded_path_size
 
 	while read excluded_path; do
-		[[ -z "$excluded_path" ]] && continue
+		[[ -z "${excluded_path:-}" ]] && continue
 
 		excluded_path_size=${#excluded_path}
 
@@ -306,28 +306,27 @@ function countFiles()
 		local -i column_index=9 skip_output=0
 		local    host_folder
 
+		local    pos_total="$(getCSI_CursorMove Position $(( lineIndex + 3 )) 9)"
 		local -i total_files=0 total_size=0
 
 		for host_folder in ${HOSTS_LIST[@]}; do
 			if checkSectionStatus "Rotation-$host_folder-Count" $hostBackuped; then
 				local pos_value="$(getCSI_CursorMove Position $lineIndex $(( column_index + 15 )))"
-				local pos_total="$(getCSI_CursorMove Position $(( lineIndex + 3 )) 9)"
 				posFilename="$(getCSI_CursorMove Position $(( lineIndex + 6 )) 1)"
 
-				local path_source="$PATH_BACKUP_FOLDER/$host_folder/Current"
+				local path_source="$PATH_BACKUP_FOLDER/$host_folder/Current"	# TODO : Count also other period folders ??
 				local log_filename="Rotation-$host_folder-Count.files.log"
 
 				(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 '' '')") ))
 
-				exec {canal_stat}>>"$pathHWDR/$log_filename"
+				exec {canal_stat}>"$pathHWDR/$log_filename"	# BUG : can't overwrite if script crash...
 
+				local filename file_type
+				local -i file_size file_depth
 				local -i count_files=0 count_size=0
 
-				while IFS= read -u ${canal} fileData; do	# TODO use multi vars - check whole source code for this...
-					echo "$fileData" >&${canal_stat}
-
-					file_size=${fileData:0:12}
-					filename="${fileData:19}"
+				while read -u ${canal} file_size file_type file_depth filename; do
+					echo "$file_size $file_type $file_depth $filename" >&${canal_stat}
 
 					((	count_size += file_size,
 						++count_files,
@@ -340,12 +339,12 @@ function countFiles()
 
 						echoFilename "/$host_folder/Current/$filename" $file_size '' ''
 					}
-				done {canal}< <(find -P "$path_source" -type f,l,p,s,b,c -printf "%12s %y %3d %P\n")
+				done {canal}< <(find -P "$path_source" -type f,l,p,s,b,c -printf "%s %y %d %P\n")
 
 				echoStat $count_files $count_size "${pos_value}" "${S_NOWHI}"
 
 				exec {canal_stat}>&-
-				mv "$pathHWDR/$log_filename" "$pathHWDD/$log_filename"
+				mv "$pathHWDR/$log_filename" "$pathHWDS/$log_filename"
 
 				makeSectionStatusDoneX "Rotation-$host_folder-Count" $hostBackuped
 			fi
@@ -354,8 +353,6 @@ function countFiles()
 		done
 
 		echoStat $total_files $total_size "${pos_total}" "${S_NOWHI}"
-
-# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
 		makeSectionStatusDoneX 'Rotation-Count' $hostBackuped
 	fi
@@ -466,19 +463,16 @@ function rotateFolder
 				local -i count_overwrited_files=0	count_overwrited_files_size=0
 				local -i count_moved_files=0		count_moved_files_size=0
 
-				local    file_data filename
-				local -i file_size
+				local    filename file_type remove_type
+				local -i file_size file_depth
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
 				if checkSectionStatus "Rotation-$host_folder-$source-Trash" $hostBackuped; then
 					(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 "${A_EMPTY_TAG}" '')") ))
 
-					while IFS= read -u ${canal} file_data; do	# TODO use multi vars - check whole source code for this...
-						echo "R $file_data" >&${canal_stat}	# TODO put the R in the find ??
-
-						file_size=${file_data:0:12}
-						filename="${file_data:19}" # TODO find how to show a better path...
+					while read -u ${canal} file_size file_type file_depth remove_type filename; do
+						echo "$remove_type $file_size $file_type $file_depth $filename" >&${canal_stat}
 
 						((	count_removed_files_size += file_size,
 							++count_removed_files,
@@ -488,9 +482,16 @@ function rotateFolder
 						++skip_output % SKIP_INTERVAL == 0 )) && {
 							echoStat $count_removed_files $count_removed_files_size "${pos_value1}" "${S_NOLRE}"
 							echoStat $totalFilesRemoved $totalSizeRemoved "${pos_total1}" "${S_NOLRE}"
+
+							if [[ "$remove_type" == 'R' ]]; then
+								filename="/Rotation/$host_folder/$source/$filename"
+							else
+								filename="/Excluded/$host_folder/$source/$filename"
+							fi
+
 							echoFilename "$filename" $file_size "$A_REMOVED_R" "$S_NOLRE"
 						}
-					done {canal}< <(find -P "$path_removed_r" -type f,l,p,s,b,c -printf "%12s %y %3d %P\n" -delete; find -P "$path_removed_e" -type f,l,p,s,b,c -printf "%12s %y %3d %P\n" -delete)
+					done {canal}< <(find -P "$path_removed_r" -type f,l,p,s,b,c -printf "%s %y %d R %P\n" -delete; find -P "$path_removed_e" -type f,l,p,s,b,c -printf "%s %y %d E %P\n" -delete)
 
 					echoStat $count_removed_files $count_removed_files_size "${pos_value1}" "${S_NOLRE}"
 					echoStat $totalFilesRemoved $totalSizeRemoved "${pos_total1}" "${S_NOLRE}"
@@ -513,37 +514,41 @@ function rotateFolder
 
 						(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 "${A_EMPTY_TAG}" '')") ))
 
-						while IFS= read -u ${canal} file_data; do
-							file_size=${file_data:0:12}
-							filename="${file_data:19}"
+						local -i file_size2
+
+						while read -u ${canal} file_size file_type file_depth filename; do
 							path_name="${filename%/*}"
 
-							getFileTypeV 'check_dest' "$path_destination/$filename"
+							getFileTypeV check_dest "$path_destination/$filename"
 							if [[ "$check_dest" != '   ' ]]; then
+								getFileSizeV file_size2 "$path_destination/$filename"
+
 								[[ -n "$path_name" ]] &&
-									clonePathDetails "$path_destination" "$path_overwrited" "$path_name" # TODO : Do this in a asynchron subshell ??
+									clonePathDetails "$path_destination" "$path_overwrited" "$path_name"
 								mv -f "$path_destination/$filename" "$path_overwrited/$filename"
 
-								echo "O $file_data" >&${canal_stat}
 
-								# BUG : correct the file_size !
-								((	count_overwrited_files_size += file_size,
+								echo "O $file_size2 $file_type $file_depth $filename" >&${canal_stat}
+
+								((	count_overwrited_files_size += file_size2,
 									++count_overwrited_files,
-									totalSizeOverwrited += file_size,
+									totalSizeOverwrited += file_size2,
 									++totalFilesOverwrited,
 
 								++skip_output % SKIP_INTERVAL == 0 )) && {
 									echoStat $count_overwrited_files $count_overwrited_files_size "${pos_value2}" "${S_NORED}"
 									echoStat $totalFilesOverwrited $totalSizeOverwrited "${pos_total2}" "${S_NORED}"
 								}
-								echoFilename "$filename" $file_size "$A_BACKUPED_Y" "$S_NORED"
+								echoFilename "$filename" $file_size2 "$A_BACKUPED_Y" "$S_NORED"
+							else
+								echoFilename "$filename" $file_size "$A_MOVED_G" "$S_NOYEL"
 							fi
 
 							[[ -n "$path_name" ]] &&
 								clonePathDetails "$path_source" "$path_destination" "$path_name"
 							mv -f "$path_source/$filename" "$path_destination/$filename"
 
-							echo "M $file_data" >&${canal_stat}
+							echo "M $file_size $file_type $file_depth $filename" >&${canal_stat}
 
 							((	count_moved_files_size += file_size,
 								++count_moved_files,
@@ -554,9 +559,7 @@ function rotateFolder
 								echoStat $count_moved_files $count_moved_files_size "${pos_value3}" "$S_NOYEL"
 								echoStat $totalFilesMoved $totalSizeMoved "${pos_total3}" "$S_NOYEL"
 							}
-							[[ "$check_dest" == '   ' ]] &&
-								echoFilename "$filename" $file_size "$A_MOVED_G" "$S_NOYEL"
-						done {canal}< <(find -P "$path_source" -type f,l,p,s,b,c -printf '%12s %y %3d %P\n')
+						done {canal}< <(find -P "$path_source" -type f,l,p,s,b,c -printf '%s %y %d %P\n')
 
 						echoStat $count_overwrited_files $count_overwrited_files_size "${pos_value2}" "${S_NORED}"
 						echoStat $totalFilesOverwrited $totalSizeOverwrited "${pos_total2}" "${S_NORED}"
@@ -573,7 +576,7 @@ function rotateFolder
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
 				exec {canal_stat}>&-
-				mv "$pathHWDR/$log_filename" "$pathHWDD/$log_filename"
+				mv "$pathHWDR/$log_filename" "$pathHWDS/$log_filename"
 
 				makeSectionStatusDoneX "Rotation-$host_folder-$source" $hostBackuped
 			fi
@@ -618,12 +621,12 @@ function openFilesListsSpliter()
 		pipeReceivedEnd=0
 		pipeExpectedEnd=1
 
-		while IFS= read -t 60 -u ${canal_main} file_data || checkLoopFail; do
-			[[ -z "$file_data" ]] && continue
-			checkLoopEnd "$file_data" || { (( $? == 1 )) && break || continue; }
+		while read -t 60 -u ${canal_main} file_size filename || checkLoopFail; do
+			[[ -z "${file_size:-}" ]] && continue
+			checkLoopEnd "$file_size" || { (( $? == 1 )) && break || continue; }
 
-			file_size="${file_data:0:12}"
-			filename="${file_data:13}"
+# 			file_size="${file_data:0:12}"
+# 			filename="${file_data:13}"
 
 			if (( file_size < 1000 )); then
 				echo "$file_size $filename" >&${canals[1]}
@@ -857,7 +860,9 @@ else
 		choice2="${S_BA}${S_DA}${S_YEL}Continue${S_NO} "
 	}
 
-	echo -ne "${A_TAG_LENGTH_SIZE} Do you want to try to continue, or start a new one ? $choice2"; getWordUserChoiceV 'selected' $choice1
+# 	echo -ne "${A_TAG_LENGTH_SIZE} Do you want to try to continue, or start a new one ? $choice2"; getWordUserChoiceV 'selected' $choice1
+
+	selected=1 # DE BUG DE BUG DE BUG DE BUG DE BUG DE BUG DE BUG
 
 	case $selected in
 		1)
@@ -868,14 +873,14 @@ else
 			find "$PATH_STATIC_WORKING_DIRECTORY" -type f -print -delete
 
 			echo -e "${S_R_AL}"
-			sleep 3
+# 			sleep 3
 			;;
 		2)
 			echo -e "\r${A_OK}"
 			;;
 	esac
 
-	sleep 2
+# 	sleep 2
 	unset choice1 choice2
 fi
 
@@ -914,14 +919,26 @@ if checkSectionStatus 'Rotation-Finished' $hostBackuped; then
 		[[ -f "$PATHFILE_LAST_BACKUP_DATE" ]] && {
 			read -a backupLastDate < "$PATHFILE_LAST_BACKUP_DATE"
 
-			declare -ai backupLastSince=( $(TZ=UTC printf '%(%-j %-H %-M %-S)T' $(( SCRIPT_START_TIME - backupLastDate[0] )) ) )
-			(( backupLastSince[0]-- ))
+			declare days hours minutes seconds
+			read days hours minutes seconds < <( TZ=UTC printf '%(%-j %-H %-M %-S)T\n' $(( SCRIPT_START_TIME - backupLastDate[0] )) )
 
-# 			TODO : show day only if > 0 ?
-			# BUG : pad the time here...
-			backupLastDateText="The last backup was at $(cat "$PATHFILE_LAST_BACKUP_DATE.txt"), ${S_BOWHI}${backupLastSince[0]}${S_NOWHI}D ${S_BOWHI}${backupLastSince[1]}${S_NOWHI}H${S_BOWHI}${backupLastSince[2]}${S_NOWHI}:${S_BOWHI}${backupLastSince[3]}${S_NOWHI}${S_R_AL} ago"
+			printf -v seconds "${S_BOWHI}%02d${S_NOWHI} second%s" $seconds "$( (( seconds > 1 )) && echo 's' )"
 
-			unset backupLastSince
+			(( --days + hours + minutes != 0 )) &&
+				printf -v minutes "${S_BOWHI}%02d${S_NOWHI} minute%s " $minutes "$( (( minutes > 1 )) && echo 's' )" ||
+				minutes=''
+
+			(( days + hours != 0 )) &&
+				printf -v hours "${S_BOWHI}%02d${S_NOWHI} hour%s " $hours "$( (( hours > 1 )) && echo 's' )" ||
+				hours=''
+
+			(( days != 0 )) &&
+				printf -v days "${S_BOWHI}%d${S_NOWHI} day%s " $days "$( (( days > 1 )) && echo 's' )" ||
+				days=''
+
+			backupLastDateText="The last backup was at ${S_NOWHI}$(cat "$PATHFILE_LAST_BACKUP_DATE.txt")${S_NO}, $days$hours$minutes$seconds${S_R_AL} ago."
+
+			unset days hours minutes seconds
 		}
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
@@ -1010,7 +1027,7 @@ if checkSectionStatus 'Rotation-Finished' $hostBackuped; then
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
-	updateScreenCurrentAction 'Rotation finished :' "${S_BL}${S_BOYEL}███ ███ ███ Press a key...${S_R_AL}"
+	updateScreenCurrentAction 'Rotation finished :' "${S_BL}${S_BOYEL}██████ Press a key...${S_R_AL}"
 	read noKey
 
 	makeSectionStatusDoneX 'Rotation-Finished' $hostBackuped
@@ -1126,8 +1143,6 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 	[[ "$(ls -A "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped")" == '' ]] &&
 		sshfs $hostBackuped:/ "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped" -o follow_symlinks -o ro -o cache=no -o ssh_command='ssh -c chacha20-poly1305@openssh.com -o Compression=no'
 
-# 		fusermount -u -z -q "$PATH_HOST_BACKUPED_FOLDER" &2> /dev/null		TODO at the end
-
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
 	posFilename="$(getCSI_CursorMove Position 10 1 )"
@@ -1169,7 +1184,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		declare -i step1_CountFilesRemoved=0	step1_CountSizeRemoved=0		canalRemoved
 		declare -i step1_CountFilesExcluded=0	step1_CountSizeExcluded=0		canalExcluded
 		declare -i step1_CountFilesUptodate=0	step1_CountSizeUptodate=0
-		declare -i step1_CountFilesSkipped=0	step1_CountSizeSkipped=0		canalSkipped  # TODO : still usefull ???
+		declare -i step1_CountFilesSkipped=0	step1_CountSizeSkipped=0		canalSkipped
 		declare -i																canalUpdatedFolders
 
 		(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 "${A_EMPTY_TAG}" '')") ))		# TODO Check the screen size at the script start and wait it will be good before continue...
@@ -1190,15 +1205,18 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		(( isNewWeek == 1 || BRUTAL == 1 )) &&	# TODO : and what about a "soft" brutal mode that don't cancel the size limitation ?
 			fileMaxSize=''
 
-		declare -i canalMain canalSkippedIn canalRemovedIn canalResolvedIn canalSkippedOut canalRemovedOut canalResolvedOut
+		declare -i canalMain canalRsync canalSkippedIn canalRemovedIn canalResolvedIn canalSkippedOut canalRemovedOut canalResolvedOut
 		declare    mainPipe="$pathHWDR/Main.pipe"
+		declare    rsyncPipe="$pathHWDR/rsync.pipe"
 		declare    skippedPipe="$pathHWDR/Skipped.fake.pipe"
 		declare    removedPipe="$pathHWDR/Removed.fake.pipe"
 		declare    resolvedPipe="$pathHWDR/Resolved.fake.pipe"
 
-		mkfifo "$mainPipe"	# TODO : think about scriptPostRemoveFiles for all file in this script...
+		mkfifo "$mainPipe"
+		mkfifo "$rsyncPipe"
 
 		exec {canalMain}<>"$mainPipe"
+		exec {canalRsync}<>"$rsyncPipe"
 		exec {canalSkippedOut}>"$skippedPipe"
 		exec {canalSkippedIn}<"$skippedPipe"
 		exec {canalRemovedOut}>"$removedPipe"
@@ -1209,15 +1227,59 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		declare -i skipOutput=0 refreshOutput=1
 		declare -i currentTime=0 lastTime=0
 
-		declare fileData filename fileType fileAction actionFlags
-		declare fileSize	# TODO Need to become -i
+		declare fileData filename fileSize fileType fileFlags fileAction actionFlags
 
 #==============================================================================================================================================================#
 #       Build the files list                                                                                                                                   #
 #==============================================================================================================================================================#
 
 		{
-			rsync -vvirtpoglDmn --files-from="$pathHWDR/Include.items" --exclude-from="$pathHWDR/Exclude.items" $fileMaxSize --delete-during --delete-excluded -M--munge-links --modify-window=5 --info=name2,backup,del,copy --out-format="> %12l %i %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/"
+			exec {canalMain}>&-
+			exec {canalSkippedOut}>&-
+			exec {canalSkippedIn}>&-
+			exec {canalRemovedOut}>&-
+			exec {canalRemovedIn}>&-
+			exec {canalResolvedOut}>&-
+			exec {canalResolvedIn}>&-
+
+			rsync -vvirtpoglDmn --files-from="$pathHWDR/Include.items" --exclude-from="$pathHWDR/Exclude.items" $fileMaxSize --delete-during --delete-excluded -M--munge-links --modify-window=5 --out-format="> %i %l %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/"
+			echo "$LOOP_END_TAG"
+		} >&${canalRsync} &
+
+		{	# rsync pipe
+			pipeReceivedEnd=0
+			pipeExpectedEnd=1
+
+			exec {canalSkippedIn}>&-
+			exec {canalRemovedIn}>&-
+			exec {canalResolvedOut}>&-
+			exec {canalResolvedIn}>&-
+
+			while read -t 60 -u ${canalRsync} fileData || checkLoopFail; do
+				[[ -z "${fileData:-}" ]] && continue
+				checkLoopEnd "$fileData" || { (( $? == 1 )) && break || continue; }
+
+				[[ "${fileData:0:1}" != '>' ]] && {
+					if [[ "${#fileData}" -le 17 ]]; then
+						continue
+					fi
+
+					if [[ "${fileData:(-17)}" != ' is over max-size' ]]; then
+						continue
+					fi
+
+					# Here we have a skipped file
+					echo "${fileData:0:$(( ${#fileData} - 17 ))}" >&${canalSkippedOut}
+					continue
+				}
+
+				[[ "${fileData:2:1}" == '*' ]] && {
+					echo "$fileData" >&${canalRemovedOut}
+					continue
+				}
+
+				echo "${fileData:2}"
+			done
 			echo "$LOOP_END_TAG"
 		} >&${canalMain} &
 
@@ -1225,29 +1287,45 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 			pipeReceivedEnd=0
 			pipeExpectedEnd=2
 
-			while IFS= read -u ${canalResolvedIn} fileData || checkLoopFail; do
-				[[ -z "$fileData" ]] && continue
+			exec {canalRsync}>&-
+			exec {canalSkippedOut}>&-
+			exec {canalSkippedIn}>&-
+			exec {canalRemovedIn}>&-
+			exec {canalRemovedOut}>&-
+			exec {canalResolvedOut}>&-
+
+			while read -t 60 -u ${canalResolvedIn} fileData || checkLoopFail; do
+				[[ -z "${fileData:-}" ]] && continue
 				checkLoopEnd "$fileData" || { (( $? == 1 )) && break || continue; }
 
-				echo "$fileData" >&${canalMain}
+				echo "$fileData"
 			done
-			echo "$LOOP_END_TAG" >&${canalMain}
-		} &
+			echo "$LOOP_END_TAG"
+		} >&${canalMain} &
 
 		{	# Skipped IN
 			pipeReceivedEnd=0
 			pipeExpectedEnd=1
 
-			while IFS= read -u ${canalSkippedIn} filename || checkLoopFail; do
-				[[ -z "$filename" ]] && continue
+			exec {canalMain}>&-
+			exec {canalRsync}>&-
+			exec {canalSkippedOut}>&-
+			exec {canalRemovedOut}>&-
+			exec {canalRemovedIn}>&-
+			exec {canalResolvedIn}>&-
+
+			declare -i switch=0
+
+			while read -t 60 -u ${canalSkippedIn} filename || checkLoopFail; do
+				[[ -z "${filename:-}" ]] && continue
 				checkLoopEnd "$filename" || { (( $? == 1 )) && break || continue; }
 
-				fileSize="$(stat -c "%12s" "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped/${filename}")"
-
-				echo "> $fileSize sf--------- ${filename}" >&${canalResolvedOut}
+				getFileSizeV fileSize "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped/${filename}"
+				echo "sf $fileSize ${filename}"
 			done
-			echo "$LOOP_END_TAG" >&${canalResolvedOut}
-		} &
+			sleep 1
+			echo "$LOOP_END_TAG"
+		} >&${canalResolvedOut} &
 
 		{	# Removed IN
 			declare excludedFilesList="$pathHWDR/Exclude.items"
@@ -1256,42 +1334,60 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 			pipeReceivedEnd=0
 			pipeExpectedEnd=1
 
-			while IFS= read -u ${canalRemovedIn} filename || checkLoopFail; do
-				[[ -z "$filename" ]] && continue
-				checkLoopEnd "$filename" || { (( $? == 1 )) && break || continue; }
+			exec {canalMain}>&-
+			exec {canalRsync}>&-
+			exec {canalSkippedOut}>&-
+			exec {canalSkippedIn}>&-
+			exec {canalRemovedOut}>&-
+			exec {canalResolvedIn}>&-
+
+			declare -i switch=0
+
+			while read -t 60 -u ${canalRemovedIn} fileData || checkLoopFail; do
+				[[ -z "${fileData:-}" ]] && continue
+				checkLoopEnd "$fileData" || { (( $? == 1 )) && break || continue; }
+
+				read fileFlags fileSize filename <<<"${fileData:2}"
 
 				getIsExcludedV removeStatus "/$filename" "$excludedFilesList"
-				fileType="$(stat -c "%F" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/${filename}")"
-				fileSize="$(stat -c "%12s" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/${filename}")"
+				read fileSize fileType <<<"$(stat -c "%s %F" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/${filename}")"
 
 				case "$fileType" in
 					'regular file'|'regular empty file'|'fifo')
-						fileType='f' ;;
+						fileType='f'
+						;;
 					'directory')
-						fileType='d' ;;
+						continue
+						;;
 					'symbolic link')
-						fileType='L' ;;
+						fileType='L'
+						;;
 					*)
 						errcho ':EXIT:' "Type inconnu !! ($fileType)"
 						;;
 				esac
-				echo "> $fileSize ${removeStatus}${fileType}--------- ${filename}" >&${canalResolvedOut}
+
+				echo "${removeStatus}${fileType} $fileSize ${filename}"
 			done
-			echo ':END:' >&${canalResolvedOut}
+			sleep 1
+			echo ':END:'
 
 			unset excludedFilesList removeStatus
-		} &
-
-
-# 		lastAction=0
-# 		countProgress=0
+		} >&${canalResolvedOut} &
 
 		pipeReceivedEnd=0
 		pipeExpectedEnd=2
 
-		while IFS= read -u ${canalMain} fileData || checkLoopFail; do
-			[[ -z "$fileData" ]] && continue
-			checkLoopEnd "$fileData" || {
+		exec {canalRsync}>&-
+		exec {canalSkippedIn}>&-
+		exec {canalRemovedIn}>&-
+		exec {canalResolvedOut}>&-
+		exec {canalResolvedIn}>&-
+
+	time {
+		while read -t 60 -u ${canalMain} fileFlags fileSize filename || checkLoopFail; do
+			[[ -z "${fileFlags:-}" ]] && continue
+			checkLoopEnd "$fileFlags" || {
 				(( $? == 1 )) && break
 
 				echo "$LOOP_END_TAG" >&${canalSkippedOut}
@@ -1300,30 +1396,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 				continue
 			}
 
-			if [[ "${fileData:0:1}" != '>' ]]; then
-				if [[ "${#fileData}" -le 17 ]]; then
-					continue
-				fi
-
-				if [[ "${fileData:(-17)}" != ' is over max-size' ]]; then
-					continue
-				fi
-
-				# Here we have a skipped file
-				echo "${fileData:0:$(( ${#fileData} - 17 ))}" >&${canalSkippedOut}
-				continue
-			fi
-
-			filename="${fileData:27}"
-			fileAction="${fileData:15:1}"
-
-			if [[ "$fileAction" == '*' ]]; then
-				echo "$filename" >&${canalRemovedOut}
-				continue
-			fi
-
-			fileSize="${fileData:2:12}"
-			fileType="${fileData:16:1}"
+			fileAction="${fileFlags:0:1}"
+			fileType="${fileFlags:1:1}"
 
 			case "$fileType" in
 				'f'|'S')
@@ -1331,7 +1405,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					;;
 				'd')
 					[[ "$fileAction" == '.' ]] && {
-						actionFlags="${fileData:17:9}"
+						actionFlags="${fileFlags:2:9}         "
 						[[ "$actionFlags" != '         ' ]] &&
 							echo "$filename" >&${canalUpdatedFolders}
 					}
@@ -1342,7 +1416,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					fileType=$TYPE_SYMLINK
 					;;
 				*)
-					echo "$fileData"
+					errcho "$fileFlags $fileSize $filename"
 					errcho ':EXIT:' "Type inconnu !! ($fileType)"
 					;;
 			esac
@@ -1355,8 +1429,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 			case $fileAction in
 			'.')
-				actionFlags="${fileData:17:9}"
-				if [[ "$actionFlags" == '         ' ]]; then
+				actionFlags="${fileFlags:2:9}         "
+				if [[ "${actionFlags:0:9}" == '         ' ]]; then
 					((	step1_CountSizeUptodate += fileSize,
 						++step1_CountFilesUptodate,
 
@@ -1412,9 +1486,9 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 				echo "$fileSize $filename" >&${canalExcluded}
 				;;
 			*)
-				actionFlags="${fileData:17:9}"
+				actionFlags="${fileFlags:2:9}         "
 
-				if [[ "$actionFlags" == '+++++++++' ]]; then
+				if [[ "${actionFlags:0:9}" == '+++++++++' ]]; then
 					((	step1_CountSizeAdded += fileSize,
 						++step1_CountFilesAdded,
 
@@ -1461,13 +1535,14 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 				echoStat $(( step1_CountFilesRemoved + step1_CountFilesUpdated1 )) $(( step1_CountSizeRemoved + step1_CountSizeUpdated1 )) "$POS_ARCHIVED_1" "$S_NOMAG"
 			}
 		done
+}
 
 #==============================================================================================================================================================#
 #       Finalize the step 1                                                                                                                                    #
 #==============================================================================================================================================================#
 
 		unset skipOutput refreshOutput currentTime lastTime fileMaxSize
-		unset fileData filename fileType fileAction actionFlags fileSize
+		unset fileData filename fileType fileFlags fileAction actionFlags fileSize
 
 		echoStat $step1_CountFilesTotal $step1_CountSizeTotal "$POS_TOTAL_1" "$S_NOWHI"
 		echoStat $step1_CountFilesExcluded $step1_CountSizeExcluded "$POS_EXCUDED_1" "$S_NOLRE"
@@ -1478,7 +1553,10 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		echoStat $step1_CountFilesSkipped $step1_CountSizeSkipped "$POS_SKIPPED_1" "$S_NOCYA"
 		echoStat $(( step1_CountFilesRemoved + step1_CountFilesUpdated1 )) $(( step1_CountSizeRemoved + step1_CountSizeUpdated1 )) "$POS_ARCHIVED_1" "$S_NOMAG"
 
+# 		safeExit
+
 		exec {canalMain}>&-
+		exec {canalRsync}>&-
 		exec {canalSkippedOut}>&-
 		exec {canalSkippedIn}>&-
 		exec {canalRemovedOut}>&-
@@ -1487,6 +1565,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		exec {canalResolvedIn}>&-
 
 		rm -f "$mainPipe"
+		rm -f "$rsyncPipe"
 		rm -f "$skippedPipe"
 		rm -f "$removedPipe"
 		rm -f "$resolvedPipe"
@@ -1506,7 +1585,9 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					step1_CountFilesUptodate step1_CountSizeUptodate step1_CountFilesSkipped step1_CountSizeSkipped >| "$pathHWDS/$VARIABLES_FOLDER/Step_1.var"
 
 		unset canalAdded canalUpdate1 canalUpdate2 canalRemoved canalExcluded canalSkipped canalUpdatedFolders
-		unset canalMain canalSkippedIn canalRemovedIn canalResolvedIn canalSkippedOut canalRemovedOut canalResolvedOut
+		unset canalMain canalRsync canalSkippedIn canalRemovedIn canalResolvedIn canalSkippedOut canalRemovedOut canalResolvedOut
+		unset mainPipe rsyncPipe skippedPipe removedPipe resolvedPipe
+
 
 		makeSectionStatusDoneX 'Step_1' $hostBackuped
 	else
@@ -1591,13 +1672,10 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 				cp -t "$pathHWDR" "$pathHWDD/Excluded-"{1..9}".files"
 
-				declare fileData filename fileType
-				declare canal fileSize # TODO need to be -i
+				declare filename fileType
+				declare -i canal fileSize
 
-				while IFS= read -u ${canal} fileData; do
-
-					fileSize="${fileData:0:12}"
-					filename="${fileData:13}"
+				while read -u ${canal} fileSize filename; do
 
 					((	step2_R_CountSizeExcluded -= fileSize, --step2_R_CountFilesExcluded,
 						step2_P_CountSizeExcluded += fileSize, ++step2_P_CountFilesExcluded,
@@ -1657,7 +1735,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 				rm -f "$pathHWDR/Excluded-"{1..9}".files"
 			fi
 
-			unset canal fileData filename fileType fileSize
+			unset canal filename fileType fileSize
 			unset sourceFolder excludedFolder
 
 			makeSectionStatusDoneX 'Step_2-Current' $hostBackuped
@@ -1677,8 +1755,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 				(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 "${A_EMPTY_TAG}" '')") ))
 
-				declare fileData filename fileType filePath
-				declare canal fileSize # TODO need to be -i
+				declare filename fileType filePath
+				declare -i canal fileSize
 
 				declare excludedItem searchedItem destinationItem searchedItemType
 
@@ -1694,9 +1772,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					if [[ "${searchedItemType:0:2}" == 'Ed' ]]; then
 						clonePathDetails "$sourceFolder" "$excludedFolder" "$excludedItem"
 
-						while IFS= read -u ${canal} fileData; do
-							fileSize="${fileData:0:12}"
-							filename="${fileData:13}"
+						while read -u ${canal} fileSize filename; do
 							filePath="${filename%/*}"
 
 							((	step2_R_CountSizeExcluded -= fileSize, --step2_R_CountFilesExcluded,
@@ -1711,7 +1787,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 							echoStatPercent $step2_P_CountFilesExcluded $step2_P_CountSizeExcluded "$POS_EXCUDED_2" "$S_NOLRE" "$step2_P_PercentFilesExcluded" "$step2_P_PercentSizeExcluded"
 
 							echoFilename "/$filename" $fileSize "$A_EXCLUDED_R" "$S_NOLRE"
-						done {canal}< <(find -P "$searchedItem" -type f,l,p,s,b,c -printf '%12s %P\n')
+						done {canal}< <(find -P "$searchedItem" -type f,l,p,s,b,c -printf '%s %P\n')
 					else
 						getFileSizeV fileSize "$sourceFolder/$excludedItem"
 						filename="$excludedItem"
@@ -1732,7 +1808,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 				done < "$pathHWDR/Exclude.items"
 
-				unset canal fileData filename fileType filePath fileSize
+				unset canal filename fileType filePath fileSize
 				unset excludedItem searchedItem destinationItem searchedItemType
 				unset sourceFolder excludedFolder
 
@@ -1818,13 +1894,10 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 				cp -t "$pathHWDR/" "$pathHWDD/Updated1-"{1..9}".files"
 
-				declare fileData filename
-				declare canal fileSize # TODO need to be -i
+				declare filename
+				declare -i canal fileSize
 
-				while IFS= read -u ${canal} fileData; do
-
-					fileSize="${fileData:0:12}"	# TODO : fileSize ??
-					filename="${fileData:13}"
+				while read -u ${canal} fileSize filename; do
 
 					if [[ ! -f "$sourceFolder/$filename" ]]; then	# BUG ! : this bug with pipe or socket file...
 						continue
@@ -1862,7 +1935,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 				rm -f "$pathHWDR/Updated1-"{1..9}".files"
 
-				unset canal fileData filename fileSize
+				unset canal filename fileSize
 
 # 				declare -p PROGRESS_TOTAL_ITEM PROGRESS_TOTAL_SIZE PROGRESS_CURRENT_FILES_ITEM PROGRESS_CURRENT_FILES_SIZE >| "$pathHWDD/$VARIABLES_FOLDER/$hostBackuped-Step_3.var"
 			fi
@@ -1900,13 +1973,10 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 				cp -t "$pathHWDR" "$pathHWDD/Removed-"{1..9}".files"
 
-				declare fileData filename
-				declare canal fileSize # TODO need to be -i
+				declare filename
+				declare -i canal fileSize
 
-				while IFS= read -u ${canal} fileData; do	# TODO : Make a function with this loop ?? (used in excluded files, backuped files and here...)
-
-					fileSize="${fileData:0:12}"
-					filename="${fileData:13}"
+				while read -u ${canal} fileSize filename; do	# TODO : Make a function with this loop ?? (used in excluded files, backuped files and here...)
 
 					if [[ ! -f "$sourceFolder/$filename" ]]; then	# BUG !!
 						continue
@@ -1960,7 +2030,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 				rm -f "$pathHWDR/Removed-"{1..9}".files"
 
-				unset canal fileData filename fileSize
+				unset canal filename fileSize
 			fi
 
 			unset step3_P_CountFilesRemoved step3_R_CountFilesRemoved step3_P_CountSizeRemoved step3_R_CountSizeRemoved
@@ -2040,22 +2110,18 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 # 							PROGRESS_CURRENT_RESENDED=0		TODO redo this
 
 							declare fileData filename fileType fileAction actionFlags
-							declare canal fileSize	# TODO Need to become -i
+							declare canal fileSize
 
-							while read -u ${canal} fileData; do
+							while read -u ${canal} fileData fileFlags fileSize filename; do
 								if [[ "${fileData:0:1}" != '>' ]]; then
 									continue
 								fi
-
-								filename="${fileData:27}"
 
 								if [[ "${filename:(-1)}" == '/' ]]; then
 									continue
 								fi
 
-								fileSize="${fileData:2:12}"
-
-								if [[ "${fileData:16:1}" == 'L' ]]; then
+								if [[ "${fileFlags:1:1}" == 'L' ]]; then
 									IsFile=0
 									TypeColor="${S_IT}"
 								else
@@ -2063,7 +2129,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 									TypeColor=''
 								fi
 
-								fileAction="${fileData:15:1}"
+								fileAction="${fileFlags:0:1}"
 
 								if [[ "$fileAction" == '.' ]]; then
 									((	stepA_R_CountSizeChecked -= fileSize,  --stepA_R_CountFilesChecked,
@@ -2087,7 +2153,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 								fi
 							done {canal}< <(rsync -vvitpoglDmc --files-from="$pathHWDR/ToCheck.files" --modify-window=5 \
 												--preallocate --inplace --no-whole-file --block-size=32768 $sizeLimit \
-												--info=name2,backup,del,copy --out-format="> %12l %i %n" "$PATH_BACKUP_FOLDER/$hostBackuped/Current" "$PATH_BACKUP_FOLDER/$hostBackuped/Day-1/")
+												--out-format="> %i %l %n" "$PATH_BACKUP_FOLDER/$hostBackuped/Current" "$PATH_BACKUP_FOLDER/$hostBackuped/Day-1/")
 
 							unset canal fileData filename fileType fileAction actionFlags fileSize
 
@@ -2247,18 +2313,15 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 				echo -n '' >| "$pathHWDR/ToCheck.files"
 
 				declare fileData filename fileType fileAction actionFlags
-				declare canal fileSize	# TODO Need to become -i
+				declare canal fileSize
 
-				while read -u ${canal} fileData; do
+				while read -u ${canal} fileData fileFlags fileSize filename; do
 					if [[ "${fileData:0:1}" != '>' ]]; then
 						continue
 					fi
 
-					filename="${fileData:27}"
-					fileSize="${fileData:2:12}"
-
 					if [[ "${filename:(-1)}" != '/' ]]; then
-						if [[ "${fileData:16:1}" == 'L' ]]; then
+						if [[ "${fileFlags:1:1}" == 'L' ]]; then
 							IsFile=0
 							TypeColor="${S_IT}"
 						else
@@ -2270,11 +2333,11 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 						continue
 					fi
 
-					fileAction="${fileData:15:1}"
-					actionFlags="${fileData:17:9}"
+					fileAction="${fileFlags:0:1}"
+					actionFlags="${fileFlags:2:9}         "
 
 					if [[ "$fileAction" == '.' ]]; then
-						if [[ "$actionFlags" == '         ' ]]; then
+						if [[ "${actionFlags:0:9}" == '         ' ]]; then
 							continue
 						else
 							actionFlags="${actionFlags//./ }"
@@ -2305,7 +2368,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 							echoFilename "/$filename" $fileSize "$A_UPDATED_Y" "$S_NOYEL"
 						fi
 					else
-						if [[ "$actionFlags" == '+++++++++' ]]; then
+						if [[ "${actionFlags:0:9}" == '+++++++++' ]]; then
 							((	step4_R_CountSizeAdded -= fileSize,   --step4_R_CountFilesAdded,
 								step4_P_CountSizeAdded += fileSize,   ++step4_P_CountFilesAdded,
 								stepA_R_CountSizeChecked += fileSize, ++stepA_R_CountFilesChecked,
@@ -2385,7 +2448,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 					fi
 				done {canal}< <(rsync -vvi${r}tpoglDm --files-from="$pathHWDR/ToBackup.files" $Exclude --modify-window=5 -M--munge-links \
 							--preallocate --inplace --no-whole-file $sizeLimit $compressConfig \
-							--info=name2,backup,del,copy --out-format="> %12l %i %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/")
+							--out-format="> %i %l %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/")
 
 				unset canal fileData filename fileType fileAction actionFlags fileSize
 
@@ -2426,20 +2489,16 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 						declare fileData filename fileType fileAction
 						declare canal fileSize	# TODO Need to become -i
 
-						while read -u ${canal} fileData; do
+						while read -u ${canal} fileData fileFlags fileSize filename; do
 							if [[ "${fileData:0:1}" != '>' ]]; then
 								continue
 							fi
-
-							filename="${fileData:27}"
 
 							if [[ "${filename:(-1)}" == '/' ]]; then
 								continue
 							fi
 
-							fileSize="${fileData:2:12}"
-
-							if [[ "${fileData:16:1}" == 'L' ]]; then
+							if [[ "${fileFlags:1:1}" == 'L' ]]; then
 								IsFile=0
 								TypeColor="${S_IT}"
 							else
@@ -2447,7 +2506,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 								TypeColor=''
 							fi
 
-							fileAction="${fileData:15:1}"
+							fileAction="${fileFlags:0:1}"
 
 							if [[ "$fileAction" == '.' ]]; then
 								((	stepA_R_CountSizeChecked -= fileSize,  --stepA_R_CountFilesChecked,
@@ -2472,7 +2531,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 							sleep $sleepDuration
 						done {canal}< <(rsync -vvitpoglDmc --files-from="$pathHWDR/ToCheck-offset.files" --modify-window=5 \
 									--preallocate --inplace --no-whole-file --block-size=32768 $compressConfig -M--munge-links \
-									--info=name2,backup,del,copy --out-format="> %12l %i %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/")
+									--info=name2,backup,del,copy --out-format="> %i %l %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/")
 
 						unset canal fileData filename fileType fileAction actionFlags fileSize
 
@@ -2537,6 +2596,8 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 	unset stepA_P_CountFilesTotal stepA_R_CountFilesTotal stepA_P_CountSizeTotal stepA_R_CountSizeTotal
 	unset stepA_P_PercentFilesTotal	stepA_R_PercentFilesTotal stepA_P_PercentSizeTotal stepA_R_PercentSizeTotal
+
+	fusermount -u -z -q "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped" &2> /dev/null
 done
 
 echo -e "\n\n\nscript finished..."
@@ -2647,6 +2708,84 @@ function __change_log__
 	: << 'COMMENT'
 
 	Next Objectives :	- Remove the openFilesListsSpliter function and write files in a single output file.
+						- Try to optimize the pipe design in the step 1.
+						- Make a check integrity function.
+						- improve the echoStatPercent function.
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	COMMIT - 30.07.2019
+		Summary : `read` now now dispatch directly some values in variables.
+
+		Details :	- `read` now now dispatch directly some values in variables in (probably) every while loop.
+					- Try some optimization with the pipe design. (I will continue in a new git branch...)
+					- Removed some useless options in the rsync call. (--info=name2,backup,del,copy,skip)
+					- Fix : On each `while` loop with `read`, the readed variables will be unset on `read` timeout, and fail on next check. This is fixed now.
+					- Fix some bugs and make some improvement.
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	30.07.2019
+		The whole source code
+			- Fix : On each `while` loop with `read`, the readed variables will be unset on `read` timeout, and fail on next check. This is fixed now.
+
+		Step 1 section
+			- Try some optimization with the pipe design. (I will continue in a new git branch...)
+			- Removed some useless options in the rsync call. (--info=name2,backup,del,copy,skip)
+
+		Step 2 section
+			- fileSize and canal variables are now a numeric (-i).
+			- `read` now now dispatch directly some values in variables.
+
+		Step 3 section
+			- fileSize and canal variables are now a numeric (-i). (except in the check integrity part.)
+			- `read` now now dispatch directly some values in variables.
+			- Removed some useless options in the rsync call. (--info=name2,backup,del,copy,skip)
+
+		Step 4 section
+			- `read` now now dispatch directly some values in variables.
+			- Removed some useless options in the rsync call. (--info=name2,backup,del,copy,skip)
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	29.07.2019
+		countFiles function
+			- The statistics file is now moved in the static working directory at the end of the function.
+			- `read` now now dispatch directly some values in variables.
+			- file_size is not padded anymore and is now a numeric variable ( -i ).
+			- Fix : the variable pos_total is moved up outside of the checkSectionStatus, so it is declared even if the section status already exist.
+
+		rotateFolder function
+			- The statistics files are now moved in the static working directory at the end of the function.
+			- `read` now now dispatch directly some values in variables.
+			- file_size is not padded anymore and is now a numeric variable ( -i ).
+			- Fix : Now a better path is output with the filename.
+			- Fix : "R"otation or "E"xcluded prefix is now correcly output is the statistics files.
+			- Fix : Size of overwrited files are now counted correctly.
+			- Little optimisation with the filename output (avoid double if).
+
+		Rotation section
+			- Showing the last backup date with padded time and sort form.
+
+		Main loop section
+			- Now unmount the backuped host folder at the end.
+
+		Step 1 section
+			- The "Removed" subshell now don't resend data if the item is a folder.
+			- Fix : the "Removed" and "Skipped" subshell now use dot in the flags details part.
+			- Added timeout for all `read` in `while`.
+			- Fix : Unset pipe filename variables.
+			- Fix : the "Removed" and "Skipped" subshell now don't send the flags details part anymore.
+
+		openFilesListsSpliter function
+			- `read` now now dispatch directly some values in variables.
+			- file_size is not padded anymore.
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	28.07.2019
+		countFiles function
+			- Add some missing `local` declarations.
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
