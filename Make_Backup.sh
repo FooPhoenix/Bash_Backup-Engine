@@ -12,7 +12,7 @@
 #	This script can backup some hosts each time and keep archive over time.	   #
 #																			   #
 ################################################################################
-#														23.03.2019 - 30.07.2019
+#														23.03.2019 - 31.07.2019
 
 PATH_INFRASTRUCTURES='/root/Infrastructures'
 
@@ -1112,7 +1112,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 			echo '
 				/home/foophoenix/VirtualBox/BackupSystem/Snapshots
 # 				/home/foophoenix/tmp
-# 				/home/foophoenix/tmp/config-test-4
+				/home/foophoenix/tmp/config-test-5
 # 				/media/foophoenix/DataCenter/.Trash
 # 				/media/foophoenix/AppKDE/.Trash
 					' > "$pathHWDR/Exclude.items"
@@ -1141,7 +1141,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 	mkdir -p "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped"
 	[[ "$(ls -A "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped")" == '' ]] &&
-		sshfs $hostBackuped:/ "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped" -o follow_symlinks -o ro -o cache=no -o ssh_command='ssh -c chacha20-poly1305@openssh.com -o Compression=no'
+		sshfs $hostBackuped:/ "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped" -o follow_symlinks -o ro -o cache=yes -o cache_stat_timeout=120 -o cache_dir_timeout=120 -o kernel_cache -o ssh_command='ssh -c chacha20-poly1305@openssh.com -o Compression=no'
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
@@ -1189,6 +1189,215 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 		(( screenWidth = $(tput cols), filenameMaxSize = screenWidth - $(getCSI_StringLength "$(echoFilename '' 0 "${A_EMPTY_TAG}" '')") ))		# TODO Check the screen size at the script start and wait it will be good before continue...
 
+		declare fileMaxSize='--max-size=150MB'
+		fileMaxSize='--max-size=500KB'
+		fileMaxSize='--max-size=50KB'
+
+		(( isNewWeek == 1 || BRUTAL == 1 )) &&	# TODO : and what about a "soft" brutal mode that don't cancel the size limitation ?
+			fileMaxSize=''
+
+		declare -i index subShellCount=5
+
+		declare -i  canalMainInput canalMainOutput
+		declare -a  processInputPipe processOutputPipe
+
+		declare     mainPipe="$pathHWDR/Main.fake.pipe"
+		declare     rsyncPipe="$pathHWDR/Rsync.pipe"
+
+		mkfifo "$rsyncPipe"
+
+		index=$subShellCount
+		while (( --index >= 0 )); do
+			processInputPipe[index]="$pathHWDR/Process-I-$index.fake.pipe"
+			processOutputPipe[index]="$pathHWDR/Process-O-$index.fake.pipe"
+		done
+
+		declare -i skipOutput=0 refreshOutput=1
+		declare -i currentTime=0 lastTime=0
+
+		declare fileData filename fileSize fileType fileFlags fileAction actionFlags
+
+#==============================================================================================================================================================#
+#       Initialize subshell system                                                                                                                             #
+#==============================================================================================================================================================#
+
+		exec {canalMainOutput}>"$mainPipe"
+
+		{
+			declare -ai canalProcessInputO
+
+			index=$subShellCount
+			while (( --index >= 0 )); do
+				exec {canalProcessInputO[index]}>> "${processInputPipe[index]}"
+			done
+
+			index=0
+			rsync -vvirtpoglDmn --files-from="$pathHWDR/Include.items" --exclude-from="$pathHWDR/Exclude.items" \
+						$fileMaxSize --delete-during --delete-excluded -M--munge-links --modify-window=5 \
+						--out-format="> %i %l %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/" |
+				while read fileData; do
+					{
+						[[ "${fileData:0:1}" != '>' ]] && {
+							if (( ${#fileData} < 17 )) || [[ "${fileData:(-17)}" != ' is over max-size' ]]; then
+								continue
+							fi
+
+							echo "s 0 ${fileData:0:$(( ${#fileData} - 17 ))}"
+							continue
+						}
+
+						[[ "${fileData:2:1}" == '*' ]] && {
+							echo "${fileData:2}"
+							continue
+						}
+					} >&${canalProcessInputO[++index % subShellCount]}
+
+					echo "${fileData:2}"
+				done
+
+			pipeReceivedEnd=0
+			pipeExpectedEnd=$subShellCount
+
+			declare -i canalRsync
+			exec {canalRsync}<>"$rsyncPipe"
+
+			index=$subShellCount
+			while (( --index >= 0 )); do
+				echo "$LOOP_END_TAG" >&${canalProcessInputO[index]}
+				exec {canalProcessInputO[index]}>&-
+			done
+			while read -t 60 -u ${canalRsync} fileData || checkLoopFail; do
+				[[ -z "${fileData:-}" ]] && continue
+				checkLoopEnd "$fileData" || { (( $? == 1 )) && break || continue; }
+
+				sleep 0.1
+			done
+
+			exec {canalRsync}<&-
+			unset canalRsync canalProcessInputO
+
+			echo "$LOOP_END_TAG"
+
+		} >&${canalMainOutput} &
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+		{
+			index=$subShellCount
+			while (( --index >= 0 )); do
+				{
+					sleep 1
+
+					pipeReceivedEnd=0
+					pipeExpectedEnd=1
+
+					declare -i canalProcessOutputI
+
+					exec {canalProcessOutputI}< "${processOutputPipe[index]}"
+
+					while read -t 60 -u ${canalProcessOutputI} fileData || checkLoopFail; do
+						[[ -z "${fileData:-}" ]] && { sleep 0.2; continue; }
+						checkLoopEnd "$fileData" || { (( $? == 1 )) && break || continue; }
+
+						echo "$fileData"
+					done
+
+					exec {canalProcessOutputI}>&-
+					unset canalProcessOutputI
+
+					echo "$LOOP_END_TAG"
+				} &
+			done
+		} >&${canalMainOutput}
+
+		exec {canalMainOutput}>&-
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+		declare -i canalProcessOutputO
+
+		index=$subShellCount
+		while (( --index >= 0 )); do
+
+			exec {canalProcessOutputO}>> "${processOutputPipe[index]}"
+
+			{
+				pipeReceivedEnd=0
+				pipeExpectedEnd=1
+
+				declare removeStatus
+
+				declare -i canal canalProcessInputI
+
+				mkfifo "$pathHWDR/Subshell-$index.pipe"
+				exec {canal}<>"$pathHWDR/Subshell-$index.pipe"
+
+				exec {canalProcessInputI}< "${processInputPipe[index]}"
+
+				sleep 2
+
+				while read -t 60 -u ${canalProcessInputI} fileFlags fileSize filename || checkLoopFail; do
+					[[ -z "${fileFlags:-}" ]] && { sleep 0.2; continue; }
+					checkLoopEnd "$fileFlags" || { (( $? == 1 )) && break || continue; }
+
+					if [[ "${fileFlags:0:1}" == 's' ]]; then
+
+						stat -c "%s" "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped/${filename}" >&${canal}
+						read -u ${canal} fileSize
+
+						echo "sf $fileSize ${filename}"
+					else
+						getIsExcludedV removeStatus "/$filename" "$pathHWDR/Exclude.items"
+
+						stat -c "%s %F" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/${filename}"	>&${canal}
+						read -u ${canal} fileSize fileType
+
+						case "$fileType" in
+							'regular file'|'regular empty file'|'fifo')
+								fileType='f'
+								;;
+							'directory')
+								continue
+								;;
+							'symbolic link')
+								fileType='L'
+								;;
+							*)
+								errcho ':EXIT:' "Type inconnu !! ($fileType)"
+								;;
+						esac
+
+						echo "${removeStatus}${fileType} $fileSize ${filename}"
+					fi
+				done
+
+				exec {canal}>&- {canalProcessInputI}>&-
+				unset removeStatus canal canalProcessInputI
+
+				rm -f "$pathHWDR/Subshell-$index.pipe"
+
+				declare -i canalRsync
+
+				exec {canalRsync}<>"$rsyncPipe"
+
+				echo "$LOOP_END_TAG" >&${canalRsync}
+				echo "$LOOP_END_TAG"
+
+				sleep 0.5
+
+				exec {canalRsync}>&-
+				unset canalRsync
+			} >&${canalProcessOutputO} &
+
+			exec {canalProcessOutputO}>&-
+		done
+
+		unset canalProcessOutputO
+
+#==============================================================================================================================================================#
+#       Build the files list                                                                                                                                   #
+#==============================================================================================================================================================#
+
 		openFilesListsSpliter 'canalAdded'    'Added'
 		openFilesListsSpliter 'canalUpdate1'  'Updated1' 		# Data update
 		openFilesListsSpliter 'canalUpdate2'  'Updated2' 		# Permission update
@@ -1198,203 +1407,15 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 
 		exec {canalUpdatedFolders}>"$pathHWDR/UpdatedFolders.files"
 
-		declare fileMaxSize='--max-size=150MB'
-		fileMaxSize='--max-size=500KB'
-		fileMaxSize='--max-size=50KB'
-
-		(( isNewWeek == 1 || BRUTAL == 1 )) &&	# TODO : and what about a "soft" brutal mode that don't cancel the size limitation ?
-			fileMaxSize=''
-
-		declare -i canalMain canalRsync canalSkippedIn canalRemovedIn canalResolvedIn canalSkippedOut canalRemovedOut canalResolvedOut
-		declare    mainPipe="$pathHWDR/Main.pipe"
-		declare    rsyncPipe="$pathHWDR/rsync.pipe"
-		declare    skippedPipe="$pathHWDR/Skipped.fake.pipe"
-		declare    removedPipe="$pathHWDR/Removed.fake.pipe"
-		declare    resolvedPipe="$pathHWDR/Resolved.fake.pipe"
-
-		mkfifo "$mainPipe"
-		mkfifo "$rsyncPipe"
-
-		exec {canalMain}<>"$mainPipe"
-		exec {canalRsync}<>"$rsyncPipe"
-		exec {canalSkippedOut}>"$skippedPipe"
-		exec {canalSkippedIn}<"$skippedPipe"
-		exec {canalRemovedOut}>"$removedPipe"
-		exec {canalRemovedIn}<"$removedPipe"
-		exec {canalResolvedOut}>"$resolvedPipe"
-		exec {canalResolvedIn}<"$resolvedPipe"
-
-		declare -i skipOutput=0 refreshOutput=1
-		declare -i currentTime=0 lastTime=0
-
-		declare fileData filename fileSize fileType fileFlags fileAction actionFlags
-
-#==============================================================================================================================================================#
-#       Build the files list                                                                                                                                   #
-#==============================================================================================================================================================#
-
-		{
-			exec {canalMain}>&-
-			exec {canalSkippedOut}>&-
-			exec {canalSkippedIn}>&-
-			exec {canalRemovedOut}>&-
-			exec {canalRemovedIn}>&-
-			exec {canalResolvedOut}>&-
-			exec {canalResolvedIn}>&-
-
-			rsync -vvirtpoglDmn --files-from="$pathHWDR/Include.items" --exclude-from="$pathHWDR/Exclude.items" $fileMaxSize --delete-during --delete-excluded -M--munge-links --modify-window=5 --out-format="> %i %l %n" $hostBackuped:"/" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/"
-			echo "$LOOP_END_TAG"
-		} >&${canalRsync} &
-
-		{	# rsync pipe
-			pipeReceivedEnd=0
-			pipeExpectedEnd=1
-
-			exec {canalSkippedIn}>&-
-			exec {canalRemovedIn}>&-
-			exec {canalResolvedOut}>&-
-			exec {canalResolvedIn}>&-
-
-			while read -t 60 -u ${canalRsync} fileData || checkLoopFail; do
-				[[ -z "${fileData:-}" ]] && continue
-				checkLoopEnd "$fileData" || { (( $? == 1 )) && break || continue; }
-
-				[[ "${fileData:0:1}" != '>' ]] && {
-					if [[ "${#fileData}" -le 17 ]]; then
-						continue
-					fi
-
-					if [[ "${fileData:(-17)}" != ' is over max-size' ]]; then
-						continue
-					fi
-
-					# Here we have a skipped file
-					echo "${fileData:0:$(( ${#fileData} - 17 ))}" >&${canalSkippedOut}
-					continue
-				}
-
-				[[ "${fileData:2:1}" == '*' ]] && {
-					echo "$fileData" >&${canalRemovedOut}
-					continue
-				}
-
-				echo "${fileData:2}"
-			done
-			echo "$LOOP_END_TAG"
-		} >&${canalMain} &
-
-		{	# Resolved IN
-			pipeReceivedEnd=0
-			pipeExpectedEnd=2
-
-			exec {canalRsync}>&-
-			exec {canalSkippedOut}>&-
-			exec {canalSkippedIn}>&-
-			exec {canalRemovedIn}>&-
-			exec {canalRemovedOut}>&-
-			exec {canalResolvedOut}>&-
-
-			while read -t 60 -u ${canalResolvedIn} fileData || checkLoopFail; do
-				[[ -z "${fileData:-}" ]] && continue
-				checkLoopEnd "$fileData" || { (( $? == 1 )) && break || continue; }
-
-				echo "$fileData"
-			done
-			echo "$LOOP_END_TAG"
-		} >&${canalMain} &
-
-		{	# Skipped IN
-			pipeReceivedEnd=0
-			pipeExpectedEnd=1
-
-			exec {canalMain}>&-
-			exec {canalRsync}>&-
-			exec {canalSkippedOut}>&-
-			exec {canalRemovedOut}>&-
-			exec {canalRemovedIn}>&-
-			exec {canalResolvedIn}>&-
-
-			declare -i switch=0
-
-			while read -t 60 -u ${canalSkippedIn} filename || checkLoopFail; do
-				[[ -z "${filename:-}" ]] && continue
-				checkLoopEnd "$filename" || { (( $? == 1 )) && break || continue; }
-
-				getFileSizeV fileSize "$PATH_HOST_BACKUPED_FOLDER/$hostBackuped/${filename}"
-				echo "sf $fileSize ${filename}"
-			done
-			sleep 1
-			echo "$LOOP_END_TAG"
-		} >&${canalResolvedOut} &
-
-		{	# Removed IN
-			declare excludedFilesList="$pathHWDR/Exclude.items"
-			declare removeStatus
-
-			pipeReceivedEnd=0
-			pipeExpectedEnd=1
-
-			exec {canalMain}>&-
-			exec {canalRsync}>&-
-			exec {canalSkippedOut}>&-
-			exec {canalSkippedIn}>&-
-			exec {canalRemovedOut}>&-
-			exec {canalResolvedIn}>&-
-
-			declare -i switch=0
-
-			while read -t 60 -u ${canalRemovedIn} fileData || checkLoopFail; do
-				[[ -z "${fileData:-}" ]] && continue
-				checkLoopEnd "$fileData" || { (( $? == 1 )) && break || continue; }
-
-				read fileFlags fileSize filename <<<"${fileData:2}"
-
-				getIsExcludedV removeStatus "/$filename" "$excludedFilesList"
-				read fileSize fileType <<<"$(stat -c "%s %F" "$PATH_BACKUP_FOLDER/$hostBackuped/Current/${filename}")"
-
-				case "$fileType" in
-					'regular file'|'regular empty file'|'fifo')
-						fileType='f'
-						;;
-					'directory')
-						continue
-						;;
-					'symbolic link')
-						fileType='L'
-						;;
-					*)
-						errcho ':EXIT:' "Type inconnu !! ($fileType)"
-						;;
-				esac
-
-				echo "${removeStatus}${fileType} $fileSize ${filename}"
-			done
-			sleep 1
-			echo ':END:'
-
-			unset excludedFilesList removeStatus
-		} >&${canalResolvedOut} &
-
 		pipeReceivedEnd=0
-		pipeExpectedEnd=2
+		pipeExpectedEnd=$(( 1 + subShellCount ))
 
-		exec {canalRsync}>&-
-		exec {canalSkippedIn}>&-
-		exec {canalRemovedIn}>&-
-		exec {canalResolvedOut}>&-
-		exec {canalResolvedIn}>&-
+		exec {canalMainInput}<"$mainPipe"
 
 	time {
-		while read -t 60 -u ${canalMain} fileFlags fileSize filename || checkLoopFail; do
+		while read -t 60 -u ${canalMainInput} fileFlags fileSize filename || checkLoopFail; do
 			[[ -z "${fileFlags:-}" ]] && continue
-			checkLoopEnd "$fileFlags" || {
-				(( $? == 1 )) && break
-
-				echo "$LOOP_END_TAG" >&${canalSkippedOut}
-				echo "$LOOP_END_TAG" >&${canalRemovedOut}
-
-				continue
-			}
+			checkLoopEnd "$fileFlags" || { (( $? == 1 )) && break || continue; }
 
 			fileAction="${fileFlags:0:1}"
 			fileType="${fileFlags:1:1}"
@@ -1553,7 +1574,7 @@ for hostBackuped in ${HOSTS_LIST[@]}; do
 		echoStat $step1_CountFilesSkipped $step1_CountSizeSkipped "$POS_SKIPPED_1" "$S_NOCYA"
 		echoStat $(( step1_CountFilesRemoved + step1_CountFilesUpdated1 )) $(( step1_CountSizeRemoved + step1_CountSizeUpdated1 )) "$POS_ARCHIVED_1" "$S_NOMAG"
 
-# 		safeExit
+		safeExit
 
 		exec {canalMain}>&-
 		exec {canalRsync}>&-
@@ -2711,6 +2732,20 @@ function __change_log__
 						- Try to optimize the pipe design in the step 1.
 						- Make a check integrity function.
 						- improve the echoStatPercent function.
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	COMMIT - 30.07.2019
+		Summary : Redesigne and make huge optimization on the pipe system.
+
+		Details :	- Redesigne and make huge optimization on the pipe system.
+
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+	31.07.2019
+		Step 1 section
+			- Redesigne all pipe system.
+			- Make huge optimization on the pipe system.
 
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
